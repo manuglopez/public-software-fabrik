@@ -1,0 +1,222 @@
+#!/usr/bin/env bash
+# fabrik-triage — vigilante del Kanban de la fábrica (servicio fabrica-triage, pasada cada 2 s). Hace tres cosas:
+#
+# 1. ENRUTADOR: tarjetas nuevas de la app (Triage o asignadas a un perfil ajeno) → orquestador, lista,
+#    comentario «🏭 Recibida…» y pase del despachador (arranca en ~8 s).
+# 2. DEPENDENCIAS VISIBLES: a las tarjetas que esperan a otras les añade al título «· ⏳ tras IMPL-1, …»
+#    y lo quita cuando esas terminan.
+# 3. CONSERJE: cada comentario NUEVO del humano lo interpreta un modelo barato (perfil `conserje`, Gemini Flash
+#    low) y actúa: aprobar/reanudar → desbloquea; cerrar → completa; nueva_tarea (en una tarjeta terminada) →
+#    crea otra para el orquestador; nada → no toca. Responde siempre con un comentario 🤖.
+#
+#   fabrik-triage              vigila (bucle)
+#   fabrik-triage --una-vez    una pasada        fabrik-triage --seco   lista lo que haría (sin conserje)
+# Tarjetas con «[manual]» en el título no se tocan.
+set -uo pipefail
+HA="${HERMES_AGENT_SRC:-$HOME/.hermes/hermes-agent}"
+PY=""
+for c in "$HOME"/.hermes/installs/*/environments/*/venv/bin/python; do
+  if env -u VIRTUAL_ENV PYTHONPATH="$HA" "$c" -c "import hermes_cli.kanban_db, hermes_cli.kanban_db_connect" 2>/dev/null; then PY="$c"; break; fi
+done
+[[ -n "$PY" ]] || { echo "✗ no encuentro el Python de Hermes"; exit 1; }
+FABRIK_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export FABRIK_SRC
+exec env -u VIRTUAL_ENV PYTHONPATH="$HA" "$PY" - "$@" <<'PYEOF'
+import json, os, re, subprocess, sys, time, datetime
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from hermes_cli.kanban_db_connect import connect
+from hermes_cli.kanban_db import specify_triage_task
+
+sys.path.insert(0, str(Path(os.environ["FABRIK_SRC"]) / "scripts"))
+import triage_cupos  # noqa: E402  (aparcado/retomada por cupo; scripts/triage_cupos.py)
+
+ORQ = os.environ.get("FABRIK_ORQUESTADOR", "orquestador")
+ROLES = {"orquestador", "explorador", "programador", "tester", "revisor", "seguridad", "docs"}
+NO_HUMANOS = ROLES | {"default", "fabrik-triage", "conserje", "decomposer", "system", "kernel", "dispatcher"}
+BOARDS = Path.home() / ".hermes/kanban/boards"
+ESTADO = Path.home() / ".hermes/factory/conserje-estado.json"
+SEP = " · ⏳ tras "
+args = set(sys.argv[1:])
+SECO, UNA = "--seco" in args, ("--una-vez" in args or "--seco" in args)
+pool = ThreadPoolExecutor(max_workers=2)
+en_curso: set = set()
+
+
+def log(msg):
+    print(f"{datetime.datetime.now():%F %T} {msg}", flush=True)
+
+
+def hk(*a, timeout=60):
+    return subprocess.run(["hermes", "kanban", *a], capture_output=True, text=True, timeout=timeout)
+
+
+def cargar_estado():
+    try:
+        return json.loads(ESTADO.read_text())
+    except Exception:
+        return {}
+
+
+def guardar_estado(e):
+    ESTADO.parent.mkdir(parents=True, exist_ok=True)
+    ESTADO.write_text(json.dumps(e))
+
+
+def etiqueta(title):
+    t = (title or "").split(SEP)[0]
+    return t.split(" ")[0] if t else "?"
+
+
+# ---------- 1. enrutador ----------
+def enrutar(board, c):
+    rows = c.execute("select id,status,coalesce(assignee,''),title from tasks where status in ('triage','todo','ready')").fetchall()
+    movidas = 0
+    for tid, status, assignee, title in rows:
+        if "[manual]" in (title or ""):
+            continue
+        ajeno = assignee not in ROLES
+        if status != "triage" and not ajeno:
+            continue
+        destino = ORQ if ajeno else assignee
+        if SECO:
+            print(f"enrutar {board} {tid} ({status}, {assignee or '-'}) → {destino}"); continue
+        if status == "triage":
+            specify_triage_task(c, tid, assignee=destino, author="fabrik-triage")
+        else:
+            hk("--board", board, "assign", tid, destino)
+        abiertos = c.execute("select count(*) from task_links l join tasks p on p.id=l.parent_id "
+                             "where l.child_id=? and p.status not in ('done','archived')", (tid,)).fetchone()[0]
+        if not abiertos:
+            hk("--board", board, "promote", tid, "enrutada por fabrik-triage")
+        hk("--board", board, "comment", "--author", "fabrik-triage", tid, f"🏭 Recibida por la fábrica: asignada a **{destino}**. Arranca en unos segundos.")
+        movidas += 1
+        log(f"{board} {tid} ({status}, {assignee or '-'}) → {destino}")
+    if movidas:
+        hk("--board", board, "dispatch")
+
+
+# ---------- 2. dependencias en el título ----------
+def dependencias(board, c):
+    rows = c.execute("select id,title from tasks where status in ('todo','ready','blocked','triage')").fetchall()
+    for tid, title in rows:
+        padres = c.execute("select p.title from task_links l join tasks p on p.id=l.parent_id "
+                           "where l.child_id=? and p.status not in ('done','archived') order by p.created_at", (tid,)).fetchall()
+        base = (title or "").split(SEP)[0]
+        quiero = base + (SEP + ", ".join(dict.fromkeys(etiqueta(p[0]) for p in padres)) if padres else "")
+        if quiero != title:
+            if SECO:
+                print(f"título {board} {tid}: {quiero}"); continue
+            hk("--board", board, "edit", tid, "--title", quiero)
+
+
+# ---------- 3. conserje ----------
+PROMPT = """Tarjeta del Kanban de una fábrica de software.
+Título: {title}
+Estado: {status} (blocked = un agente espera respuesta o aprobación del usuario; done = terminada; todo/ready = en cola)
+Último mensaje del agente: {ultimo}
+Comentario NUEVO del usuario: «{comentario}»
+
+Decide la acción. Devuelve SOLO un JSON: {{"accion": "aprobar|cerrar|reanudar|nueva_tarea|nada", "respuesta": "<frase corta en español para el usuario>"}}
+- aprobar: el usuario aprueba/da el visto bueno/dice adelante (y la tarjeta espera aprobación).
+- reanudar: el usuario contesta lo que el agente preguntó o da instrucciones para seguir esta misma tarjeta.
+- cerrar: el usuario dice que está hecha/terminada/que se cierre/que sobra.
+- nueva_tarea: la tarjeta ya está terminada (done) y el usuario pide algo más.
+- nada: es solo una nota o no requiere acción."""
+
+
+def conserje(board, cid, tid, status, title, comentario):
+    try:
+        c = connect(board=board)
+        ultimo = c.execute("select coalesce(summary,'') from task_runs where task_id=? order by id desc limit 1", (tid,)).fetchone()
+        ultimo = (ultimo[0] if ultimo else "")[:700].replace("\n", " ")
+        q = PROMPT.format(title=title, status=status, ultimo=ultimo or "(ninguno)", comentario=comentario[:1500])
+        env = {k: os.environ[k] for k in ("HOME", "PATH", "LANG") if k in os.environ}
+        r = subprocess.run(["hermes", "-p", "conserje", "chat", "-Q", "-q", q], capture_output=True, text=True,
+                           timeout=120, env=env, cwd=str(Path.home() / ".hermes/cache/scratch"))
+        m = re.search(r"\{.*?\"accion\".*?\}", r.stdout, re.S)
+        d = json.loads(m.group(0)) if m else {"accion": "nada", "respuesta": ""}
+        acc, resp = d.get("accion", "nada"), (d.get("respuesta") or "").strip()
+        st = c.execute("select status from tasks where id=?", (tid,)).fetchone()[0]
+        hecho = ""
+        if acc in ("aprobar", "reanudar") and st in ("blocked", "scheduled"):
+            hk("--board", board, "unblock", tid); hk("--board", board, "dispatch"); hecho = "desbloqueada"
+        elif acc == "cerrar" and st not in ("done", "archived"):
+            if st in ("blocked", "scheduled"):
+                hk("--board", board, "unblock", tid)
+            hk("--board", board, "complete", tid, "--summary", f"Cerrada por el usuario: «{comentario[:300]}»"); hecho = "cerrada"
+        elif acc in ("nueva_tarea", "reanudar") and st == "done":
+            body = (f"Seguimiento de la tarjeta {tid} («{title.split(SEP)[0]}»).\n\n**Petición del usuario:** {comentario}\n\n"
+                    f"**Resultado anterior:** {ultimo or '(ver tarjeta)'}")
+            out = hk("--board", board, "create", f"Seguimiento: {comentario[:70]}", "--assignee", ORQ, "--body", body, "--json").stdout
+            nid = (re.search(r'"id":\s*"([^"]+)"', out) or [None, "?"])[1]
+            hk("--board", board, "dispatch"); hecho = f"nueva tarjeta {nid}"
+        nota = f"🤖 conserje: {resp or acc}" + (f" (**{hecho}**)" if hecho else "")
+        hk("--board", board, "comment", "--author", "conserje", tid, nota)
+        log(f"conserje {board} {tid} [{st}] «{comentario[:60]}» → {acc} {hecho}")
+    except Exception as e:
+        log(f"conserje {board} {tid}: error {e}")
+    finally:
+        en_curso.discard(cid)
+
+
+def comentarios(board, c, estado):
+    ult = estado.get(board)
+    maxid = c.execute("select coalesce(max(id),0) from task_comments").fetchone()[0]
+    if ult is None:                      # primera vez: no procesa el historial
+        estado[board] = maxid; return True
+    if maxid <= ult:
+        return False
+    rows = c.execute("select k.id,k.task_id,k.author,k.body,t.status,t.title from task_comments k join tasks t on t.id=k.task_id "
+                     "where k.id>? order by k.id", (ult,)).fetchall()
+    for cid, tid, autor, body, status, title in rows:
+        if autor in NO_HUMANOS or (body or "").startswith(("🤖", "🏭", "🚀", "✅", "⏳", "SCHEDULED: ⏳")) or "[manual]" in (title or ""):
+            continue
+        if status == "running":          # al agente en marcha se le habla con «Message the running worker»
+            continue
+        key = f"{board}:{cid}"
+        if key in en_curso or SECO:
+            continue
+        en_curso.add(key)
+        pool.submit(conserje, board, key, tid, status, title or "", body or "")
+    estado[board] = maxid
+    return True
+
+
+def despachar_listas(board, c):
+    """El despachador del gateway lee kanban.max_in_progress* solo al arrancar; `hermes kanban dispatch`
+    relee config.yaml en cada llamada. Despachando aquí cada minuto, los límites nuevos valen sin reiniciar
+    el gateway (reiniciarlo mataría a los agentes en marcha)."""
+    if c.execute("SELECT 1 FROM tasks WHERE status='ready' LIMIT 1").fetchone():
+        r = hk("--board", board, "dispatch", timeout=120)
+        n = [l for l in r.stdout.splitlines() if "->" in l]
+        if n:
+            log(f"{board}: despachadas {len(n)}: " + "; ".join(l.strip()[:60] for l in n))
+
+
+estado = cargar_estado()
+ultimo_despacho = 0.0
+while True:
+    cambio = False
+    toca_despachar = time.time() - ultimo_despacho >= 60
+    for db in sorted(BOARDS.glob("*/kanban.db")):
+        board = db.parent.name
+        try:
+            c = connect(board=board)
+            enrutar(board, c)
+            dependencias(board, c)
+            cambio |= comentarios(board, c, estado)
+            triage_cupos.esperar_cupo(board, c, hk=hk, seco=SECO, log=log)
+            if toca_despachar and not SECO:
+                despachar_listas(board, c)
+        except Exception as e:
+            log(f"{board}: {e}")
+    if toca_despachar:
+        ultimo_despacho = time.time()
+    if cambio and not SECO:
+        guardar_estado(estado)
+    if UNA:
+        break
+    time.sleep(2)
+pool.shutdown(wait=True)
+PYEOF

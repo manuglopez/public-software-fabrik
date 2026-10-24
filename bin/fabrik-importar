@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# fabrik-importar — restaura en esta máquina una copia hecha con fabrik-exportar.
+#
+#   fabrik-importar <fichero.tar.zst.age> [--seco]
+#
+# - Descifra (pide la contraseña) y comprueba el contenido.
+# - Antes de escribir, guarda lo que vaya a sobrescribir en ~/.fabrik-antes-<fecha>.tar.zst (marcha atrás).
+# - Para el gateway y la memoria mientras restaura; los vuelve a arrancar al final.
+# - Si el usuario de la otra máquina era distinto, reescribe las rutas /home/<antes> → $HOME en config y .env.
+# - Las ramas de agentes sin subir quedan en ~/.fabrik-bundles/*.bundle (git fetch <bundle> 'agente/*:agente/*').
+set -euo pipefail
+IN="${1:?uso: fabrik-importar <fichero.tar.zst.age> [--seco]}"; SECO=0; [[ "${2:-}" == "--seco" ]] && SECO=1
+command -v age >/dev/null || { echo "✗ falta 'age'"; exit 1; }
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/fabrik-import.XXXXXX")"; trap 'rm -rf "$TMP"' EXIT
+if [[ -n "${FABRIK_AGE_IDENTITY:-}" ]]; then AGEARGS=(-i "$FABRIK_AGE_IDENTITY"); else AGEARGS=(); fi
+age -d "${AGEARGS[@]}" "$IN" | zstd -dq | tar -x -C "$TMP"
+[[ -f "$TMP/.fabrik-export.txt" ]] || { echo "✗ no parece una exportación de la fábrica"; exit 1; }
+cat "$TMP/.fabrik-export.txt"
+# El usuario de origen se lee como dato (nunca con `source`: el archivo importado no ejecuta nada) y se valida.
+usuario="$(sed -n 's/^usuario=//p' "$TMP/.fabrik-export.txt" | head -1)"
+[[ -z "$usuario" || "$usuario" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "✗ usuario de origen no válido en la exportación"; exit 1; }
+echo "Contenido:"; (cd "$TMP" && find . -mindepth 1 -maxdepth 2 | sort | sed 's/^/  /' | head -40)
+(( SECO )) && { echo "(seco: no se ha escrito nada)"; exit 0; }
+
+read -r -p "¿Restaurar en $HOME? Se hará copia de lo que se sobrescriba [s/N] " r; [[ "$r" == s* || "$r" == S* ]] || exit 1
+ANTES="$HOME/.fabrik-antes-$(date +%Y%m%d-%H%M%S).tar.zst"
+(cd "$TMP" && find . -type f | sed 's#^\./##') | (cd "$HOME" && while read -r f; do [[ -e "$f" ]] && echo "$f"; done) > "$TMP/.sobrescribe"
+if [[ -s "$TMP/.sobrescribe" ]]; then (cd "$HOME" && tar -c -T "$TMP/.sobrescribe" | zstd -q -o "$ANTES"); echo "· copia previa: $ANTES"; fi
+
+systemctl --user stop hermes-gateway fabrica-memoria 2>/dev/null || true
+rm -f "$TMP/.sobrescribe"
+(cd "$TMP" && tar -c .) | tar -x -C "$HOME"
+if [[ -n "${usuario:-}" && "$usuario" != "$USER" ]]; then
+  echo "· rutas /home/$usuario → $HOME"
+  grep -rlI --include='*.yaml' --include='.env' --include='*.env' --include='*.service' "/home/$usuario" \
+       "$HOME/.hermes" "$HOME/.config/fabrica" "$HOME/.config/systemd/user" 2>/dev/null | xargs -r sed -i "s#/home/$usuario#$HOME#g"
+fi
+systemctl --user daemon-reload
+systemctl --user start hermes-gateway 2>/dev/null || true
+[[ -d "$HOME/.pg0" ]] && systemctl --user start fabrica-memoria 2>/dev/null || true
+echo "✓ restaurado. Ahora: login en Claude/agy/gh si no te llevaste los logins, y ./install.sh --comprobar"

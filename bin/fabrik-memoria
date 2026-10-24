@@ -1,0 +1,140 @@
+#!/usr/bin/env python3
+"""fabrik-memoria — memoria compartida de la fábrica (Hindsight local). Opcional: si no responde, avisa y sale 0.
+
+  fabrik-memoria recall "<tema o síntoma>" [--repo api-acme] [--max 1500]
+  fabrik-memoria leccion --repo R --sintoma S --causa C --solucion X --donde D [--etiquetas a,b]
+      guarda la lección en Hindsight Y en <primer pack activo con memoria.banco>/conocimiento/lecciones/ (fuente
+      reconstruible, se comparte por git en el repo del pack); sin pack así, en $FABRIK_DATA/conocimiento/lecciones/.
+      Nunca escribe en el repo del motor ($FABRIK_HOME).
+  fabrik-memoria estado
+"""
+import argparse, datetime as dt, json, os, re, subprocess, sys, urllib.request
+from pathlib import Path
+
+URL = os.environ.get("FABRIK_MEMORIA_URL", "http://127.0.0.1:8888")
+HOME = Path(os.environ.get("FABRIK_HOME", Path.home() / "Code/software-fabrik"))
+
+
+def _cfg(key):
+    """Lee una clave de la config fusionada con el `fabrik` de este mismo repo (ruta relativa al script, no por
+    PATH: otro `fabrik` ajeno daría otra config). Si falla, avisa por stderr y devuelve ''."""
+    fabrik = Path(__file__).resolve().parent / "fabrik"
+    try:
+        r = subprocess.run([str(fabrik), "config", "get", key], capture_output=True, text=True, timeout=60)
+        if r.returncode == 0:
+            return r.stdout.strip()
+        motivo = (r.stderr.strip().splitlines() or [f"exit {r.returncode}"])[-1]
+    except Exception as e:
+        motivo = f"{type(e).__name__}: {e}"
+    print(f"aviso: no pude leer '{key}' de la config con {fabrik} ({motivo})", file=sys.stderr)
+    return ""
+
+
+# El banco sale de la config `memoria.banco`; FABRIK_MEMORIA_BANK la pisa.
+BANK = os.environ.get("FABRIK_MEMORIA_BANK") or _cfg("memoria.banco")
+if not BANK:
+    BANK = "fabrica"
+    print(f"aviso: sin memoria.banco en la config; uso el banco '{BANK}'", file=sys.stderr)
+
+
+def api(method, path, body=None, timeout=20):
+    req = urllib.request.Request(f"{URL}/v1/default/banks/{BANK}{path}", method=method,
+                                 data=json.dumps(body).encode() if body is not None else None,
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        raw = r.read()
+        return json.loads(raw) if raw else {}
+
+
+def sin_memoria(e):
+    print(f"(memoria no disponible: {type(e).__name__}; sigue sin ella)")
+    sys.exit(0)
+
+
+def recall(a):
+    body = {"query": a.consulta, "max_tokens": a.max, "budget": "mid"}
+    if a.repo:
+        body["tags"] = [f"repo:{a.repo}"]
+        body["tags_match"] = "any"
+    try:
+        r = api("POST", "/memories/recall", body, timeout=75)
+    except Exception as e:
+        sin_memoria(e)
+    res = r.get("results") or r.get("memories") or []
+    if not res:
+        print("(sin resultados)"); return
+    for m in res:
+        meta = m.get("metadata") or {}
+        tags = [t for t in (m.get("tags") or []) if t.startswith("repo:")]
+        when = (m.get("occurred_start") or m.get("mentioned_at") or "")[:10]
+        print(f"- [{','.join(t[5:] for t in tags) or meta.get('repo','?')} {when}] {m.get('text','').strip()}")
+
+
+def _bajo(ruta, raiz):
+    try:
+        Path(ruta).resolve().relative_to(Path(raiz).resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def destino_lecciones():
+    """(pack, carpeta) donde se escriben las lecciones (D-P7): `conocimiento/lecciones/` del primer pack activo con
+    `memoria.banco` (`fabrik config pack-dir`); sin pack así, `$FABRIK_DATA/conocimiento/lecciones/` (pack «local»).
+    Nunca bajo $FABRIK_HOME ni el repo del motor (público): un pack que viva ahí se salta."""
+    data = Path(os.environ.get("FABRIK_DATA", Path.home() / ".hermes/factory"))
+    motor = (HOME, Path(__file__).resolve().parent.parent)
+    fabrik = Path(__file__).resolve().parent / "fabrik"
+    try:
+        r = subprocess.run([str(fabrik), "config", "pack-dir", "memoria.banco"], capture_output=True, text=True, timeout=60)
+        filas = [l.split("\t", 1) for l in r.stdout.splitlines() if "\t" in l] if r.returncode == 0 else []
+    except Exception as e:
+        print(f"aviso: no pude listar los packs activos ({type(e).__name__}: {e}); uso {data}", file=sys.stderr)
+        filas = []
+    for nombre, dirpack in filas:
+        if not any(_bajo(dirpack, m) for m in motor):
+            return nombre, Path(dirpack) / "conocimiento/lecciones"
+    return "local", data / "conocimiento/lecciones"
+
+
+def leccion(a):
+    hoy = dt.date.today().isoformat()
+    slug = re.sub(r"[^a-z0-9]+", "-", a.sintoma.lower())[:60].strip("-")
+    md = (f"---\nrepo: {a.repo}\nfecha: {hoy}\netiquetas: [{a.etiquetas}]\n---\n"
+          f"**Síntoma:** {a.sintoma}\n\n**Causa:** {a.causa}\n\n**Solución:** {a.solucion}\n\n**Dónde:** {a.donde}\n")
+    pack, d = destino_lecciones()
+    d.mkdir(parents=True, exist_ok=True)
+    f = d / f"{hoy}-{a.repo}-{slug}.md"; f.write_text(md)
+    print(f"lección escrita: {f}")
+    tags = [f"repo:{a.repo}", "fuente:leccion"] + [f"tema:{t.strip()}" for t in a.etiquetas.split(",") if t.strip()]
+    try:
+        api("POST", "/memories", {"async": True, "items": [{
+            "content": md, "timestamp": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "context": f"Lección verificada al cerrar una tarjeta en el repo {a.repo}",
+            "document_id": f"leccion/{pack}/{f.name}", "update_mode": "replace", "tags": tags,
+            "metadata": {"repo": a.repo, "fuente": "leccion", "pack": pack,
+                         "path": f"conocimiento/lecciones/{f.name}"}}]})
+        print("lección enviada a la memoria")
+    except Exception as e:
+        print(f"(memoria no disponible: {type(e).__name__}; la lección queda en el fichero)")
+
+
+def estado(_):
+    try:
+        s = api("GET", "/stats")
+    except Exception as e:
+        sin_memoria(e)
+    print(json.dumps({k: s.get(k) for k in ("total_documents", "total_nodes", "total_observations",
+                                            "pending_operations", "failed_operations")}, indent=1))
+
+
+p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+sp = p.add_subparsers(dest="cmd", required=True)
+r = sp.add_parser("recall"); r.add_argument("consulta"); r.add_argument("--repo"); r.add_argument("--max", type=int, default=1500)
+r.set_defaults(fn=recall)
+l = sp.add_parser("leccion")
+for k in ("repo", "sintoma", "causa", "solucion", "donde"):
+    l.add_argument(f"--{k}", required=True)
+l.add_argument("--etiquetas", default=""); l.set_defaults(fn=leccion)
+sp.add_parser("estado").set_defaults(fn=estado)
+a = p.parse_args(); a.fn(a)

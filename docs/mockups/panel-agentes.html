@@ -1,0 +1,72 @@
+<style>
+  .fx{display:inline-block;min-width:760px;max-width:980px;font-size:13px;color:var(--foreground)}
+  .fx h2{font-size:15px;margin:0 0 4px}
+  .fx .sub{color:var(--muted-foreground);font-size:12px;margin-bottom:12px}
+  .fx .tag{font-size:11px;padding:1px 7px;border-radius:9px;border:1px solid var(--border);color:var(--muted-foreground);white-space:nowrap}
+  .fx .acc{border-color:var(--accent);color:var(--accent)}
+  .fx .tabs{display:flex;gap:14px;margin:0 0 12px;border-bottom:1px solid var(--border)}
+  .fx .tabs span{padding:4px 0;color:var(--muted-foreground)}
+  .fx .tabs span.on{color:var(--foreground);border-bottom:2px solid var(--accent)}
+  .fx table{border-collapse:collapse;width:100%}
+  .fx th{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted-foreground);text-align:left;font-weight:500;padding:6px 8px;border-bottom:1px solid var(--border)}
+  .fx td{padding:7px 8px;border-bottom:1px solid var(--border);vertical-align:middle}
+  .fx select{font:inherit;font-size:12px;color:var(--foreground);background:var(--card);border:1px solid var(--border);border-radius:7px;padding:3px 6px}
+  .fx .muted{color:var(--muted-foreground);font-size:12px}
+  .fx .card{border:1px solid var(--border);border-radius:10px;padding:10px 12px;background:var(--card);margin-top:12px}
+  .fx .card h3{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted-foreground);margin:0 0 8px}
+  .fx .btn{font:inherit;font-size:12px;padding:3px 9px;border-radius:7px;border:1px solid var(--border);background:transparent;color:var(--foreground);cursor:pointer}
+  .fx .btn.pri{border-color:var(--accent);color:var(--accent)}
+  .fx .warn{color:var(--accent);font-size:12px}
+</style>
+<div class="fx">
+  <h2>🏭 Fábrica <span class="tag">MAQUETA — datos de ejemplo</span></h2>
+  <div class="sub">Pestaña Agentes: qué modelo usa cada rol. Los cambios valen para las tarjetas nuevas; las que están en marcha terminan con su modelo.</div>
+  <div class="tabs"><span>Inicio</span><span>Proyectos</span><span class="on">Agentes</span><span>Costes</span></div>
+
+  <table>
+    <tr><th>Rol</th><th>Modelo</th><th>Esfuerzo</th><th>Reserva si falla</th><th>Pago</th><th>Bake-off</th></tr>
+    <tr><td><b>orquestador</b></td>
+      <td><select><option selected>Claude Opus 5.5</option><option>Claude Sonnet 5.5</option><option>Gemini 4 Argon</option></select></td>
+      <td><select><option>medio</option><option selected>alto</option></select></td>
+      <td><select><option selected>Claude Sonnet 5.5</option><option>—</option></select></td>
+      <td><span class="tag">suscripción</span></td><td class="muted">—</td></tr>
+    <tr><td><b>explorador</b></td>
+      <td><select><option selected>Gemini 3.8 Flash</option><option>DeepSeek Flash</option><option>Kimi K2 Turbo</option></select></td>
+      <td><select><option>bajo</option><option selected>medio</option><option>alto</option></select></td>
+      <td><select><option selected>DeepSeek Flash</option><option>—</option></select></td>
+      <td><span class="tag">suscripción</span></td><td class="muted">—</td></tr>
+    <tr><td><b>programador</b></td>
+      <td><select><option selected>Kimi for Coding</option><option>DeepSeek V4 Pro</option><option>DeepSeek Flash</option><option>Gemini 4 Argon</option><option>Gemini 3.8 Flash</option><option>Claude Sonnet 5.5</option></select></td>
+      <td><select><option>medio</option><option selected>alto</option></select></td>
+      <td><select><option selected>DeepSeek V4 Pro</option><option>Gemini 4 Argon</option></select></td>
+      <td><span class="tag">suscripción</span></td><td><span class="tag acc">pendiente</span></td></tr>
+    <tr><td><b>tester</b></td>
+      <td><select><option selected>DeepSeek V4 Pro</option><option>DeepSeek Flash</option><option>Gemini 3.8 Flash</option></select></td>
+      <td><select><option selected>medio</option><option>alto</option></select></td>
+      <td><select><option selected>DeepSeek Flash</option></select></td>
+      <td><span class="tag">pago · ~0,02 $/tarjeta</span></td><td class="muted">—</td></tr>
+    <tr><td><b>revisor</b></td>
+      <td><select><option selected>Claude Opus 5.5</option><option>Claude Sonnet 5.5</option></select></td>
+      <td><select><option>medio</option><option selected>alto</option></select></td>
+      <td><select><option selected>Claude Sonnet 5.5</option></select></td>
+      <td><span class="tag">suscripción</span></td><td class="muted">—</td></tr>
+    <tr><td><b>seguridad</b></td>
+      <td><select><option selected>Claude Opus 5.5</option></select></td>
+      <td><select><option selected>alto</option></select></td>
+      <td><select><option selected>Claude Sonnet 5.5</option></select></td>
+      <td><span class="tag">suscripción</span></td><td class="muted">—</td></tr>
+    <tr><td><b>docs</b></td>
+      <td><select><option selected>Gemini 3.8 Flash</option><option>DeepSeek Flash</option></select></td>
+      <td><select><option>bajo</option><option selected>medio</option></select></td>
+      <td><select><option selected>DeepSeek Flash</option></select></td>
+      <td><span class="tag">suscripción</span></td><td class="muted">—</td></tr>
+  </table>
+  <div class="warn" style="margin-top:8px">⚠ Regla activa: el revisor debe ser de otra familia que el programador (Kimi ≠ Claude ✓).</div>
+  <div style="margin-top:8px;display:flex;gap:8px"><button class="btn pri">Guardar</button><button class="btn">Probar modelos</button><button class="btn">Restaurar recomendados</button></div>
+
+  <div class="card">
+    <h3>Cambio puntual (sin tocar el rol)</h3>
+    <div class="muted">En cualquier tarjeta, en el plan antes de aprobarlo, o en el chat: «esta tarjeta con Opus».
+    Regla automática: tarjetas de tenancy, RBAC, migraciones o facturación → Opus.</div>
+  </div>
+</div>

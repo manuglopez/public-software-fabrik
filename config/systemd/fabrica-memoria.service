@@ -1,0 +1,20 @@
+[Unit]
+Description=Memoria compartida de la fábrica (Hindsight API, solo localhost)
+After=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/fabrica/hindsight.env
+UnsetEnvironment=PYTHONPATH VIRTUAL_ENV
+WorkingDirectory=%h/.local/share/fabrica/hindsight
+ExecStart=%h/.local/bin/hindsight-api --host 127.0.0.1 --port 8888 --no-access-log
+Restart=on-failure
+RestartSec=10
+MemoryHigh=5G
+MemoryMax=6G
+CPUQuota=300%
+Nice=15
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=default.target

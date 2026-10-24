@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Cambia la app de escritorio de Hermes por la compilada con los parches de fabrik (release-fabrik/).
+# Ejecutar con Hermes CERRADO. Guarda la versión anterior en release/linux-unpacked.anterior (vuelta atrás: --deshacer).
+set -euo pipefail
+D="$HOME/.hermes/hermes-agent/apps/desktop"
+ACT="$D/release/linux-unpacked"; NUEVA="$D/release-fabrik/linux-unpacked"; ANT="$D/release/linux-unpacked.anterior"
+
+if pgrep -f "$ACT/Hermes" >/dev/null; then
+  echo "✋ Hermes está abierto. Ciérralo del todo (también de la bandeja) y vuelve a ejecutar esto."; exit 1
+fi
+
+if [[ "${1:-}" == "--deshacer" ]]; then
+  [[ -d "$ANT" ]] || { echo "No hay versión anterior guardada."; exit 1; }
+  rm -rf "$ACT" && mv "$ANT" "$ACT" && echo "↩️  Restaurada la versión anterior. Abre Hermes."; exit 0
+fi
+
+[[ -x "$NUEVA/Hermes" ]] || { echo "No hay compilación nueva en $NUEVA"; exit 1; }
+rm -rf "$ANT"; mv "$ACT" "$ANT"; mv "$NUEVA" "$ACT"
+echo "✅ App actualizada con los parches de fabrik. Abre Hermes como siempre."
+echo "   Si algo va mal: fabrik-desktop-actualizar --deshacer"

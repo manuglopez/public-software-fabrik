@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# fabrik-exportar — copia CIFRADA de la fábrica para llevarla a otra máquina (pendrive).
+#
+#   fabrik-exportar <carpeta_destino> [--con-logins] [--sin-memoria]
+#
+# Incluye (rutas relativas a $HOME):
+#   ~/.hermes: config.yaml, .env, memories/, skills/, profiles/ (config, .env, SOUL, memorias, sesiones), plugins/,
+#              cron/, desktop-plugins/, kanban/ + kanban.db (tableros), state.db (historial), factory/ (catálogo, logs)
+#   ~/.config/fabrica (claves de la fábrica), unidades systemd fabrica-*
+#   memoria Hindsight (~/.pg0) salvo --sin-memoria (para el servicio un momento para copiarla coherente)
+#   ramas agente/* con commits sin subir → git bundle
+#   --con-logins: además ~/.hermes/auth.json y ~/.config/gh (tokens; mejor volver a hacer login)
+# NO incluye: código de Hermes, cachés, modelos de embeddings (se descargan), tus checkouts de ~/Code.
+# Cifrado con `age -p` (contraseña). Las bases SQLite se copian con .backup (coherentes aunque Hermes esté en marcha).
+set -euo pipefail
+DEST="${1:?uso: fabrik-exportar <carpeta_destino> [--con-logins] [--sin-memoria]}"; shift
+LOGINS=0; MEMORIA=1
+for a in "$@"; do case "$a" in --con-logins) LOGINS=1 ;; --sin-memoria) MEMORIA=0 ;; esac; done
+command -v age >/dev/null || { echo "✗ falta 'age' (pacman -S age / apt install age)"; exit 1; }
+mkdir -p "$DEST"
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/fabrik-export.XXXXXX")"; trap 'rm -rf "$TMP"' EXIT
+STG="$TMP/home"; mkdir -p "$STG"
+cd "$HOME"
+
+H=.hermes
+INCL=("$H/config.yaml" "$H/.env" "$H/memories" "$H/skills" "$H/profiles" "$H/plugins" "$H/cron" "$H/desktop-plugins"
+      "$H/kanban" "$H/factory" "$H/SOUL.md" ".config/fabrica")
+for u in .config/systemd/user/fabrica-*; do [[ -e "$u" ]] && INCL+=("$u"); done
+(( LOGINS )) && INCL+=("$H/auth.json" ".config/gh")
+EXIST=(); for p in "${INCL[@]}"; do [[ -e "$p" ]] && EXIST+=("$p"); done
+
+echo "· copiando configuración y datos"
+tar -c --exclude='*/cache' --exclude='*/logs/*.log.*' --exclude='*/audio_cache' --exclude='*/image_cache' \
+    --exclude='*.lock' --exclude='*.sock' --exclude='*.pid' --exclude='*.db' --exclude='*.db-wal' --exclude='*.db-shm' \
+    --exclude='*/node_modules' --exclude='*/.venv' --exclude='*/__pycache__' \
+    "${EXIST[@]}" | tar -x -C "$STG"
+
+echo "· bases SQLite (copia coherente)"
+while IFS= read -r db; do
+  mkdir -p "$STG/$(dirname "$db")"
+  sqlite3 "$db" ".backup '$STG/$db'"
+done < <(find "$H" -maxdepth 4 -name '*.db' -type f \( -path "$H/state.db" -o -path "$H/kanban.db" -o -path "$H/projects.db" \
+           -o -path "$H/profiles/*" -o -path "$H/kanban/*" \) 2>/dev/null)
+
+if (( MEMORIA )) && [[ -d .pg0 ]]; then
+  echo "· memoria Hindsight (servicio parado unos segundos)"
+  systemctl --user stop fabrica-memoria 2>/dev/null || true
+  tar -c .pg0 | tar -x -C "$STG"
+  systemctl --user start fabrica-memoria 2>/dev/null || true
+fi
+
+echo "· trabajo de agentes sin subir"
+mkdir -p "$STG/.fabrik-bundles"
+for base in "$HOME"/Code/.factory-worktrees/*/_repo; do
+  [[ -d "$base/.git" ]] || continue
+  repo="$(basename "$(dirname "$base")")"
+  ramas=$(git -C "$base" for-each-ref --format='%(refname:short)' refs/heads/agente/ | while read -r b; do
+            [[ -n "$(git -C "$base" log --oneline "origin/$b..$b" 2>/dev/null || git -C "$base" log --oneline -1 "$b")" ]] && echo "$b"; done)
+  [[ -n "$ramas" ]] && git -C "$base" bundle create -q "$STG/.fabrik-bundles/$repo.bundle" $ramas && echo "  $repo: $(echo $ramas | wc -w) rama(s)"
+done
+
+cat > "$STG/.fabrik-export.txt" <<EOF
+fecha=$(date -Iseconds)
+maquina=$(hostname)
+usuario=$USER
+con_logins=$LOGINS
+con_memoria=$MEMORIA
+fabrik_commit=$(git -C "$HOME/Code/software-fabrik" rev-parse --short HEAD 2>/dev/null)
+EOF
+
+OUT="$DEST/fabrica-$(hostname)-$(date +%Y%m%d-%H%M).tar.zst.age"
+echo "· comprimiendo y cifrando → $OUT (te pedirá una contraseña dos veces)"
+if [[ -n "${FABRIK_AGE_RECIPIENT:-}" ]]; then AGEARGS=(-r "$FABRIK_AGE_RECIPIENT"); else AGEARGS=(-p); fi
+tar -C "$STG" -c . | zstd -q -T0 -10 | age "${AGEARGS[@]}" -o "$OUT"
+chmod 600 "$OUT"
+echo "✓ $(du -h "$OUT" | cut -f1) en $OUT"
+echo "  En la otra máquina: clona software-fabrik, ./install.sh, y luego  bin/fabrik-importar $OUT"

@@ -1,0 +1,130 @@
+#!/usr/bin/env bash
+# factory-prep — prepara el puesto de trabajo aislado de una tarjeta.
+#
+#   factory-prep <repo> <slug> [--base develop]   crea clon de fábrica (si falta), worktree, rama y BD propia
+#   factory-prep --limpiar <repo> <slug>          borra worktree, rama local y BD (solo lo creado aquí)
+#
+# Aislamiento (nunca se toca el checkout del usuario en ~/Code/<repo>):
+# - Clon propio:  $FX_WT/<repo>/_repo   (clonado de GitHub; su `develop` sí podemos resetearlo a origin)
+# - Worktree:     $FX_WT/<repo>/<slug>  rama agente/<slug> desde origin/<base>
+# - vendor/ y node_modules/: copia reflink (btrfs, instantánea) del checkout del usuario + composer/npm install
+# - .env copiado con DB_* apuntando a la BD propia fx_<repo>_<slug> (usuario MariaDB `fx`, solo fx_*)
+# - .factory/env: variables que carga factory-test; .factory excluido de git
+set -euo pipefail
+
+FX_WT="${FX_WT:-$HOME/Code/.factory-worktrees}"
+SRC_ROOT="${FX_SRC_ROOT:-$HOME/Code}"
+DBENV="$HOME/.config/fabrica/db.env"
+[[ -f "$DBENV" ]] && . "$DBENV"
+
+FABRIK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cfg() { uv run --with pyyaml python "$FABRIK_DIR/scripts/fabrik_config.py" "$@" || true; }
+
+dbname() { local s; s="fx_$(echo "$1_$2" | tr -c 'a-zA-Z0-9\n' '_' | tr 'A-Z' 'a-z')"; echo "${s:0:54}"; }
+sql() { mariadb -h"${FX_DB_HOST:-127.0.0.1}" -P"${FX_DB_PORT:-3307}" -u"${FX_DB_USER:-fx}" -p"$FX_DB_PASSWORD" -e "$1"; }
+
+if [[ "${1:-}" == "--limpiar" ]]; then
+  REPO="${2#*/}"; SLUG="$3"; WT="$FX_WT/$REPO/$SLUG"; BASE="$FX_WT/$REPO/_repo"
+  [[ -f "$WT/.factory/env" ]] || { echo "✗ $WT no es un worktree de la fábrica"; exit 1; }
+  git -C "$BASE" worktree remove --force "$WT"
+  git -C "$BASE" branch -D "agente/$SLUG" 2>/dev/null || true
+  DB="$(dbname "$REPO" "$SLUG")"
+  for d in $(mariadb -N -h"${FX_DB_HOST:-127.0.0.1}" -P"${FX_DB_PORT:-3307}" -u"${FX_DB_USER:-fx}" -p"$FX_DB_PASSWORD" -e "SHOW DATABASES" | grep -E "^fx_" | grep -E "^${DB}(_test_[0-9]+)?$"); do
+    sql "DROP DATABASE \`$d\`"; done
+  echo "✓ limpiado $WT y BD $DB"; exit 0
+fi
+
+REPO="${1:?repo}"; SLUG="${2:?slug}"; shift 2
+# owner: propietario/repo explícito en el arg (p. ej. acme/api-acme) > FX_ORG > primer `owners` de la config
+if [[ "$REPO" == */* ]]; then
+  ORG="${REPO%%/*}"; REPO="${REPO#*/}"
+else
+  ORG="${FX_ORG:-$(cfg get owners | head -1)}"
+fi
+BASEBR="$(cfg get base_por_defecto)"; DESDE=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --base)  BASEBR="$2"; shift 2 ;;
+    # IMPL en paralelo: sub-worktree que sale de la rama LOCAL de la feature (agente/<feature>); luego factory-juntar
+    --desde) DESDE="$2"; shift 2 ;;
+    *) echo "✗ opción desconocida: $1"; exit 2 ;;
+  esac
+done
+[[ "$SLUG" =~ ^[a-z0-9][a-z0-9._-]*$ ]] || { echo "✗ slug inválido (minúsculas, números, . _ -)"; exit 2; }
+# si la config falló, cfg() devuelve vacío: abortar con un mensaje claro en vez de seguir con ORG/BASEBR vacíos
+[[ -n "$ORG" ]]    || { echo "✗ no pude determinar el propietario (owners) de la config: revisa 'fabrik config ver', pasa <propietario>/<repo> o FX_ORG"; exit 2; }
+[[ -n "$BASEBR" ]] || { echo "✗ no pude determinar la rama base (base_por_defecto) de la config: revisa 'fabrik config ver' o pasa --base"; exit 2; }
+
+BASE="$FX_WT/$REPO/_repo"; WT="$FX_WT/$REPO/$SLUG"; SRC="$SRC_ROOT/$REPO"; BR="agente/$SLUG"
+mkdir -p "$FX_WT/$REPO"
+
+# 1. Clon de fábrica (independiente del checkout del usuario)
+if [[ ! -d "$BASE/.git" ]]; then
+  echo "· clonando $ORG/$REPO en $BASE"
+  if [[ -d "$SRC/.git" ]]; then
+    git clone -q --reference-if-able "$SRC" --dissociate "git@github.com:$ORG/$REPO.git" "$BASE"
+  else
+    git clone -q "git@github.com:$ORG/$REPO.git" "$BASE"
+  fi
+fi
+git -C "$BASE" fetch -q --prune origin
+# develop local del clon de fábrica = origin (necesario para `greptile review -b develop`)
+if git -C "$BASE" show-ref -q "refs/remotes/origin/$BASEBR"; then
+  cur="$(git -C "$BASE" symbolic-ref --short HEAD 2>/dev/null || true)"
+  if [[ "$cur" == "$BASEBR" ]]; then git -C "$BASE" reset -q --hard "origin/$BASEBR"
+  else git -C "$BASE" branch -q -f "$BASEBR" "origin/$BASEBR"; fi
+fi
+
+# 2. Worktree + rama
+[[ -e "$WT" ]] && { echo "✗ ya existe $WT"; exit 1; }
+PUNTO="origin/$BASEBR"
+if [[ -n "$DESDE" ]]; then
+  git -C "$BASE" show-ref -q "refs/heads/agente/$DESDE" || { echo "✗ no existe la rama agente/$DESDE (crea antes la feature)"; exit 1; }
+  PUNTO="agente/$DESDE"; echo "· sub-worktree de la feature $DESDE (se junta con: factory-juntar $REPO $DESDE $SLUG)"
+fi
+git -C "$BASE" worktree add -q -b "$BR" "$WT" "$PUNTO"
+mkdir -p "$WT/.factory"; echo ".factory/" >> "$(git -C "$WT" rev-parse --git-common-dir)/info/exclude"
+
+# 3. Dependencias: reflink desde el checkout del usuario (solo lectura sobre él)
+for dep in vendor node_modules; do
+  if [[ -d "$SRC/$dep" && -f "$WT/$( [[ $dep == vendor ]] && echo composer.lock || echo package.json )" ]]; then
+    cp -a --reflink=auto "$SRC/$dep" "$WT/$dep"
+  fi
+done
+[[ -f "$WT/composer.json" ]] && (cd "$WT" && composer install -q --no-interaction --no-progress 2>&1 | tail -3) || true
+
+# 4. BD propia + .env  (en el MariaDB de la fábrica, puerto 3307: aislado de las BD del usuario)
+DB="$(dbname "$REPO" "$SLUG")"
+# Repos cuyo suite EXIGE un nombre fijo de BD de tests (p. ej. api-acme: guarda en CreatesApplication) → se usa ese
+# nombre en el MariaDB de la fábrica (compartido entre worktrees del repo; factory-test serializa las suites).
+FIJO="$(grep -oP 'name="DB_DATABASE" value="\K[^"]+' "$WT/phpunit.xml" 2>/dev/null | head -1 || true)"   # sin phpunit.xml no debe cortar (pipefail)
+if [[ -n "$FIJO" ]] && grep -qs "'$FIJO'" "$WT/tests/CreatesApplication.php" "$WT/tests/TestCase.php" "$WT/config/database.php"; then
+  DB="$FIJO"; echo "· el suite exige la BD '$FIJO': se usa en el MariaDB de la fábrica (${FX_DB_PORT:-3307})"
+fi
+sql "CREATE DATABASE IF NOT EXISTS \`$DB\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
+cat > "$WT/.factory/env" <<EOF
+DB_HOST=${FX_DB_HOST:-127.0.0.1}
+DB_PORT=${FX_DB_PORT:-3307}
+DB_DATABASE=$DB
+DB_USERNAME=${FX_DB_USER:-fx}
+DB_PASSWORD=$FX_DB_PASSWORD
+DB_URL=
+FX_REPO=$REPO
+FX_SLUG=$SLUG
+FX_BRANCH=$BR
+EOF
+chmod 600 "$WT/.factory/env"
+for envf in .env .env.testing; do
+  # Nunca sobrescribir un fichero VERSIONADO (p. ej. un .env.testing del repo): la BD llega por .factory/env,
+  # que factory-test exporta y que tiene prioridad sobre los .env (dotenv no pisa variables ya definidas).
+  if git -C "$WT" ls-files --error-unmatch "$envf" >/dev/null 2>&1; then continue; fi
+  if [[ -f "$SRC/$envf" ]]; then
+    sed -E -e "s#^DB_HOST=.*#DB_HOST=${FX_DB_HOST:-127.0.0.1}#" -e "s#^DB_PORT=.*#DB_PORT=${FX_DB_PORT:-3307}#" -e "s#^DB_DATABASE=.*#DB_DATABASE=$DB#" \
+           -e "s#^DB_USERNAME=.*#DB_USERNAME=${FX_DB_USER:-fx}#" -e "s#^DB_PASSWORD=.*#DB_PASSWORD=$FX_DB_PASSWORD#" \
+           "$SRC/$envf" > "$WT/$envf"
+    chmod 600 "$WT/$envf"
+  fi
+done
+
+echo "✓ worktree $WT"
+echo "  rama $BR desde $PUNTO · BD $DB · tests: cd $WT && factory-test -- <comando>"

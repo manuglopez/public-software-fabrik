@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# factory-test — turno único de suites de tests en toda la máquina (agentes Y sesiones del usuario).
+#
+#   factory-test [--etiqueta TXT] [--] <comando...>   ejecuta el comando con el turno cogido
+#   factory-test estado                                quién tiene el turno y desde cuándo
+#
+# - Espera su turno (flock). Muestra quién lo tiene mientras espera. Máx. espera FX_TEST_WAIT (s, def. 7200).
+# - Si el directorio actual (o un padre) tiene .factory/env, lo carga (BD propia del worktree).
+# - Log completo en $FABRIK_DATA/logs/tests/; por pantalla solo resumen (fallos + final), para no
+#   llenar el contexto de los agentes.
+# - Timeout del comando FX_TEST_TIMEOUT (s, def. 2700). Devuelve el exit code del comando.
+set -uo pipefail
+
+FABRIK_DATA="${FABRIK_DATA:-$HOME/.hermes/factory}"
+LOCKDIR="$FABRIK_DATA/locks"; LOGDIR="$FABRIK_DATA/logs/tests"
+LOCK="$LOCKDIR/factory-test.lock"; OWNER="$LOCKDIR/factory-test.owner"
+mkdir -p "$LOCKDIR" "$LOGDIR"
+
+if [[ "${1:-}" == "estado" ]]; then
+  if flock -n "$LOCK" true 2>/dev/null; then echo "libre"; else echo "ocupado: $(cat "$OWNER" 2>/dev/null)"; fi
+  exit 0
+fi
+
+ETIQ=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --etiqueta) ETIQ="$2"; shift 2 ;;
+    --) shift; break ;;
+    *) break ;;
+  esac
+done
+[[ $# -eq 0 ]] && { sed -n '2,12p' "$0"; exit 2; }
+
+# BD propia del worktree
+d="$PWD"; while [[ "$d" != "/" ]]; do
+  if [[ -f "$d/.factory/env" ]]; then set -a; . "$d/.factory/env"; set +a; break; fi
+  d="$(dirname "$d")"
+done
+
+REPO="$(basename "$(git rev-parse --show-toplevel 2>/dev/null || echo "$PWD")")"
+TS="$(date +%Y%m%d-%H%M%S)"; LOG="$LOGDIR/$TS-$REPO.log"
+QUIEN="${HERMES_PROFILE:-${USER}} pid=$$ repo=$REPO ${ETIQ:+[$ETIQ] }cmd=$* desde=$(date +%H:%M:%S)"
+
+exec 9>"$LOCK"
+if ! flock -n 9; then
+  echo "⏳ esperando turno de tests — lo tiene: $(cat "$OWNER" 2>/dev/null)"
+  flock -w "${FX_TEST_WAIT:-7200}" 9 || { echo "✗ sin turno tras ${FX_TEST_WAIT:-7200}s"; exit 75; }
+fi
+echo "$QUIEN" > "$OWNER"
+trap 'echo "" > "$OWNER"' EXIT
+
+INI=$(date +%s)
+timeout --kill-after=30 "${FX_TEST_TIMEOUT:-2700}" "$@" >"$LOG" 2>&1
+RC=$?
+DUR=$(( $(date +%s) - INI ))
+
+echo "── factory-test: rc=$RC en ${DUR}s · log: $LOG"
+[[ $RC -eq 124 ]] && echo "✗ TIMEOUT (${FX_TEST_TIMEOUT:-2700}s)"
+# Fallos (máx. 40 líneas) + final del log (25 líneas)
+grep -n -E "^(FAIL|ERROR|✘|  ✘)|^[0-9]+\) |There (was|were) [0-9]+ (failure|error)|Failed asserting|Exception:|FAILURES!|ERRORS!" "$LOG" | head -40
+echo "── final:"; tail -25 "$LOG"
+exit $RC

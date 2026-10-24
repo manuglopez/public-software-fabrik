@@ -1,0 +1,216 @@
+diff --git a/apps/desktop/src/plugins/kanban/api.ts b/apps/desktop/src/plugins/kanban/api.ts
+index fdab9c7895..131e51a686 100644
+--- a/apps/desktop/src/plugins/kanban/api.ts
++++ b/apps/desktop/src/plugins/kanban/api.ts
+@@ -53,6 +53,11 @@ let os: null | PluginOs = null
+ /** Selected board slug ('' = the server's current board). Persisted. */
+ export const $boardSlug = atom<string>('')
+ 
++/** One-shot "open this card" request (from a completion toast's Open
++ *  kanban): the board page opens the drawer on arrival and clears it.
++ *  Ephemeral, never persisted. */
++export const $openTaskRequest = atom<null | string>(null)
++
+ /** Whether the "how this board works" intro was dismissed. Persisted. */
+ export const $introDismissed = atom<boolean>(false)
+ 
+@@ -210,7 +215,13 @@ export function bindApi(
+ ): () => void {
+   rest = r
+   os = notifyDoors?.os ?? null
+-  bindCompletionNotify(r, notifyDoors?.t, notifyDoors?.os)
++  bindCompletionNotify(r, notifyDoors?.t, notifyDoors?.os, (slug, taskId) => {
++    $boardSlug.set(slug)
++
++    if (taskId) {
++      $openTaskRequest.set(taskId)
++    }
++  })
+   const unsubs: Array<() => void> = []
+ 
+   queryClient.setQueryDefaults(KANBAN_KEY_ROOT, { enabled: routedToScope })
+diff --git a/apps/desktop/src/plugins/kanban/board.tsx b/apps/desktop/src/plugins/kanban/board.tsx
+index 8b05b1fbb2..f7804a8681 100644
+--- a/apps/desktop/src/plugins/kanban/board.tsx
++++ b/apps/desktop/src/plugins/kanban/board.tsx
+@@ -81,6 +81,7 @@ import {
+   taskKey,
+   useKanbanScope
+ } from './api'
++import { $openTaskRequest } from './api'
+ import { BoardSwitcher } from './board-switcher'
+ import { TaskDrawer } from './drawer'
+ import { EMPTY_OVERRIDE, ModelOverrideField, overrideCreateFields, type TaskModelOverride } from './model-override'
+@@ -1129,6 +1130,19 @@ export function KanbanBoardPage() {
+     $newTaskLane.set(null)
+   }, [requestedLane])
+ 
++  // A notification's "Open kanban" parks the card id here (after selecting
++  // its board); open its drawer once we're on the page.
++  const requestedTask = useValue($openTaskRequest)
++
++  useEffect(() => {
++    if (requestedTask === null) {
++      return
++    }
++
++    setOpenId(requestedTask)
++    $openTaskRequest.set(null)
++  }, [requestedTask])
++
+   const toggleSelect = (id: string) => {
+     setSelected(prev => {
+       const next = new Set(prev)
+diff --git a/apps/desktop/src/plugins/kanban/completion-notify.test.ts b/apps/desktop/src/plugins/kanban/completion-notify.test.ts
+index 2790d28d66..32bd283b05 100644
+--- a/apps/desktop/src/plugins/kanban/completion-notify.test.ts
++++ b/apps/desktop/src/plugins/kanban/completion-notify.test.ts
+@@ -20,7 +20,7 @@ interface OsDoor {
+   notify: (input: { title: string; body?: string; silent?: boolean }) => void
+ }
+ interface Mod {
+-  bindCompletionNotify(r: Rest, t?: Translate, os?: OsDoor): void
++  bindCompletionNotify(r: Rest, t?: Translate, os?: OsDoor, focus?: (slug: string, taskId: string) => void): void
+   onKanbanEventsFrame(slug: string, events?: CompletionEvent[]): Promise<boolean>
+ }
+ 
+@@ -375,6 +375,41 @@ describe('notification content', () => {
+     lastNotify().action?.onClick()
+     expect(hostMock.navigate).toHaveBeenCalledWith('/kanban')
+   })
++
++  it('Open Kanban focuses the board the event came from and its card, then navigates', async () => {
++    const m = await loadModule()
++    const focus = vi.fn()
++    m.bindCompletionNotify(makeRest(() => 100) as never, undefined, undefined, focus)
++
++    await m.onKanbanEventsFrame('acme', [ev(101, 'completed', { summary: 'Done' })])
++
++    lastNotify().action?.onClick()
++    expect(focus).toHaveBeenCalledWith('acme', expect.any(String))
++    expect(focus.mock.calls[0][1]).not.toBe('')
++    expect(hostMock.navigate).toHaveBeenCalledWith('/kanban')
++  })
++
++  it('the title names the project (board) and a completion stays 20 s', async () => {
++    const m = await loadModule()
++    m.bindCompletionNotify(makeRest(() => 100) as never)
++
++    await m.onKanbanEventsFrame('acme', [ev(101, 'completed', { summary: 'Done' })])
++
++    expect(lastNotify().title).toMatch(/^acme · /)
++    expect((lastNotify() as { durationMs?: number }).durationMs).toBe(20_000)
++  })
++
++  it('a throwing focus door still navigates', async () => {
++    const m = await loadModule()
++    m.bindCompletionNotify(makeRest(() => 100) as never, undefined, undefined, () => {
++      throw new Error('boom')
++    })
++
++    await m.onKanbanEventsFrame('acme', [ev(101, 'completed')])
++
++    lastNotify().action?.onClick()
++    expect(hostMock.navigate).toHaveBeenCalledWith('/kanban')
++  })
+ })
+ 
+ describe('notification failure isolation', () => {
+@@ -535,7 +570,7 @@ describe('i18n routing', () => {
+     await m.onKanbanEventsFrame('smoke', [ev(101, 'completed', { summary: 'Done', artifacts: ['/a/1.md', '/b/2.md'] })])
+ 
+     expect(lastNotify()).toMatchObject({
+-      title: 'タスク完了',
++      title: 'smoke · タスク完了',
+       detail: 't101 · 成果物 2 件',
+       action: { label: 'かんばんを開く', onClick: expect.any(Function) }
+     })
+diff --git a/apps/desktop/src/plugins/kanban/completion-notify.ts b/apps/desktop/src/plugins/kanban/completion-notify.ts
+index cba2f23f49..383ea0b4f6 100644
+--- a/apps/desktop/src/plugins/kanban/completion-notify.ts
++++ b/apps/desktop/src/plugins/kanban/completion-notify.ts
+@@ -85,10 +85,22 @@ function t(key: string, ...args: unknown[]): string {
+   return translated && translated !== key ? translated : fallbackT(key, ...args)
+ }
+ 
+-export function bindCompletionNotify(r: Rest, pluginTranslate?: PluginTranslate, os?: PluginOs): void {
++/** Selects the event's board and parks its card for the board page to open.
++ *  Injected by api.ts (which owns the board/selection atoms) so this module
++ *  stays import-light. */
++type FocusTask = (slug: string, taskId: string) => void
++let focusTask: FocusTask | null = null
++
++export function bindCompletionNotify(
++  r: Rest,
++  pluginTranslate?: PluginTranslate,
++  os?: PluginOs,
++  focus?: FocusTask
++): void {
+   rest = r
+   translate = pluginTranslate ?? null
+   osDoor = os ?? null
++  focusTask = focus ?? null
+ }
+ 
+ async function ensureBaseline(slug: string): Promise<void> {
+@@ -142,7 +154,12 @@ function rawErrorFor(kind: string, ev: CompletionEvent): string {
+   return kind === 'gave_up' ? trimmed(ev.payload?.error) : ''
+ }
+ 
+-function notifyOne(kind: string, spec: { titleKey: string; toast: ToastKind }, ev: CompletionEvent): void {
++function notifyOne(
++  kind: string,
++  spec: { titleKey: string; toast: ToastKind },
++  ev: CompletionEvent,
++  slug: string
++): void {
+   const taskId = (ev.task_id ?? '').trim()
+   const body = bodyFor(kind, ev)
+ 
+@@ -165,17 +182,34 @@ function notifyOne(kind: string, spec: { titleKey: string; toast: ToastKind }, e
+   const message = body || taskId || title
+   host.notify({
+     kind: spec.toast,
+-    title,
++    // Which project: the board slug leads the title (e.g. "acme · Task completed").
++    title: slug ? `${slug} · ${title}` : title,
+     message,
++    // 5 s (the info default) is too short to reach the "Open kanban" button;
++    // warnings/errors already stay until dismissed.
++    ...(spec.toast === 'success' ? { durationMs: 20_000 } : {}),
+     ...(detail ? { detail } : {}),
+-    action: { label: t('notify.openKanban'), onClick: () => host.navigate('/kanban') }
++    action: {
++      label: t('notify.openKanban'),
++      // Go to the board the event came from (not whichever is selected) and
++      // open the card itself.
++      onClick: () => {
++        try {
++          focusTask?.(slug, taskId)
++        } catch {
++          /* navigation still happens */
++        }
++
++        host.navigate('/kanban')
++      }
++    }
+   })
+ 
+   // Native OS notification — the desktop shell fires it only while the user
+   // is away from Hermes (the toast above covers the foreground case). Isolated:
+   // a missing/broken shell must not mark the toast as unfired.
+   try {
+-    osDoor?.notify({ title, body: [message, detail].filter(Boolean).join('\n') })
++    osDoor?.notify({ title: slug ? `${slug} · ${title}` : title, body: [message, detail].filter(Boolean).join('\n') })
+   } catch {
+     /* swallowed */
+   }
+@@ -210,7 +244,7 @@ export async function onKanbanEventsFrame(slug: string, events?: CompletionEvent
+ 
+     if (spec) {
+       try {
+-        notifyOne(ev.kind!, spec, ev)
++        notifyOne(ev.kind!, spec, ev, slug)
+         fired = true
+       } catch {
+         /* swallowed */

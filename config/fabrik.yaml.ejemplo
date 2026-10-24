@@ -1,0 +1,30 @@
+# Configuración personal de la fábrica (~/.config/fabrica/fabrik.yaml).
+# Capa 3: sobrescribe valores del motor y de los packs activos.
+# En el primer arranque, install.sh crea este fichero rellenando usuario_github,
+# owners, packs y una propuesta de `modelos` con los proveedores que detecta.
+
+usuario_github: ""      # gh api user -q .login
+owners: []              # cuentas/organizaciones cuyos repos gestiona la fábrica
+# packs: []             # rutas a packs (install.sh --pack <ruta|url> las añade). Sin esta clave rigen
+#                       # los packs que traiga el repo (salvo `ejemplo`, que solo se usa si no hay otro).
+
+tableros:
+  - slug: personal
+    nombre: Personal
+    descripcion: Repositorios personales
+    icono: "🧑‍💻"
+
+tablero_por_defecto: personal
+
+# Modelos por rol: personales (los propone `install.sh` según tus proveedores; el pack solo fija `permitir_pago`).
+# Ejemplo (proveedor = plugin de Hermes o proveedor con clave en ~/.hermes/.env):
+# modelos:
+#   programador:
+#     proveedor: kimi-coding
+#     modelo: kimi-for-coding
+#     reserva: []
+#   pool:
+#     medio:
+#       - {proveedor: kimi-coding, modelo: kimi-for-coding, herramientas: true, coste: suscripcion}
+#   reserva_final: {proveedor: kimi-coding, modelo: kimi-for-coding}
+modelos: {}

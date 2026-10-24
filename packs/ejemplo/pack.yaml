@@ -1,0 +1,32 @@
+# Pack de ejemplo para la comunidad: org ficticia, sin nombres reales.
+# Copia este directorio como packs/<tu-pack>/ y ajusta los valores.
+nombre: ejemplo
+titulo: Pack de ejemplo
+owners:
+  - acme
+extra_repos: []
+tableros:
+  - slug: acme-dev
+    nombre: Acme desarrollo
+    descripcion: api-acme + acme-web + acme-app
+    icono: "🛠️"
+  - slug: acme-ops
+    nombre: Acme operaciones
+    descripcion: infra, despliegues y mantenimiento
+    icono: "🧰"
+tablero_por_defecto: acme-dev
+repos_calientes:
+  - api-acme
+  - acme-web
+base_por_defecto: main
+memoria:
+  banco: ejemplo
+  nombre: Memoria de ejemplo
+  descripcion: >-
+    Memoria técnica de ejemplo de una fábrica multiagente. Sirve de plantilla
+    para crear el banco de memoria de tu propia organización.
+# Los modelos son personales: cada usuario pone roles, `pool` y `reserva_final` en su ~/.config/fabrica/fabrik.yaml
+# (`install.sh` los propone según los proveedores que detecta). El pack solo puede fijar `permitir_pago`:
+# con false (por defecto) se ignoran las entradas con `coste: pago` del pool y `install.sh` no las propone.
+modelos:
+  permitir_pago: false

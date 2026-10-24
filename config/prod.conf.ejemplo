@@ -1,0 +1,9 @@
+# Copiar a ~/.config/fabrica/prod.conf (chmod 600). Solo estas acciones podrán lanzar los agentes en producción.
+# Cada acción = `php artisan <accion>` sin argumentos en <path> del servidor <host> (alias de la config de SSH).
+# Valores ficticios: sustituye proyecto, alias y ruta por los tuyos.
+
+[api-acme]
+host=servidor-acme
+path=/srv/api-acme/current
+acciones=config:cache horizon:terminate responsecache:clear log:errores
+cloudflare=servidor   # purga con el token del .env del servidor (no sale de allí); «si» = token local en cloudflare.env

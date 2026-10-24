@@ -1,0 +1,75 @@
+<style>
+  .fx{display:inline-block;min-width:760px;max-width:980px;font-size:13px;color:var(--foreground)}
+  .fx h2{font-size:15px;margin:0 0 4px}
+  .fx .sub{color:var(--muted-foreground);font-size:12px;margin-bottom:12px}
+  .fx .tag{font-size:11px;padding:1px 7px;border-radius:9px;border:1px solid var(--border);color:var(--muted-foreground);white-space:nowrap}
+  .fx .acc{border-color:var(--accent);color:var(--accent)}
+  .fx .grid{display:grid;grid-template-columns:1.25fr 1fr;gap:12px}
+  .fx .card{border:1px solid var(--border);border-radius:10px;padding:10px 12px;background:var(--card)}
+  .fx .card h3{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted-foreground);margin:0 0 8px;display:flex;justify-content:space-between}
+  .fx .row{display:flex;align-items:center;gap:8px;padding:6px 0;border-top:1px solid var(--border)}
+  .fx .row:first-of-type{border-top:none}
+  .fx .grow{flex:1;min-width:0}
+  .fx .muted{color:var(--muted-foreground);font-size:12px}
+  .fx .btn{font:inherit;font-size:12px;padding:3px 9px;border-radius:7px;border:1px solid var(--border);background:transparent;color:var(--foreground);cursor:pointer}
+  .fx .btn.pri{border-color:var(--accent);color:var(--accent)}
+  .fx .dot{width:8px;height:8px;border-radius:50%;background:var(--accent);flex:none}
+  .fx .dot.off{background:var(--border)}
+  .fx .prod{font-weight:600;margin-top:4px}
+  .fx .bar{height:6px;border-radius:3px;background:var(--border);overflow:hidden;flex:1}
+  .fx .bar i{display:block;height:100%;background:var(--accent)}
+  .fx .tabs{display:flex;gap:14px;margin:0 0 12px;border-bottom:1px solid var(--border)}
+  .fx .tabs span{padding:4px 0;color:var(--muted-foreground)}
+  .fx .tabs span.on{color:var(--foreground);border-bottom:2px solid var(--accent)}
+</style>
+<div class="fx">
+  <h2>🏭 Fábrica <span class="tag">MAQUETA — datos de ejemplo</span></h2>
+  <div class="sub">Página propia en la barra lateral de Hermes Desktop · se abre también con ⌘K → «Fábrica»</div>
+  <div class="tabs"><span class="on">Inicio</span><span>Proyectos</span><span>Agentes</span><span>Costes</span></div>
+
+  <div class="grid">
+    <div>
+      <div class="card">
+        <h3>Te toca a ti <span class="tag acc">3</span></h3>
+        <div class="row"><span class="dot"></span><div class="grow"><b>Aprobar plan</b> · acme · «Casos de enfermedad por estado»<div class="muted">2 PRs (api-acme + web-acme) · 5 tarjetas · impacto: marca A y marca B</div></div><button class="btn" data-hermes-send="Muéstrame el plan de la feature «Casos de enfermedad por estado»">Ver</button><button class="btn pri">Aprobar</button></div>
+        <div class="row"><span class="dot"></span><div class="grow"><b>Merge</b> · api-acme #701 · fix(checklist): no se cierra con tareas pendientes<div class="muted">Greptile 5/5 · CI verde · revisor Opus ✓ · cobertura diff 99 %</div></div><button class="btn pri">Abrir PR</button></div>
+        <div class="row"><span class="dot"></span><div class="grow"><b>Bloqueada</b> · web-acme · «Sitemap por idioma»<div class="muted">El programador pregunta: ¿las URLs /en/ llevan hreflang x-default?</div></div><button class="btn">Responder</button></div>
+      </div>
+
+      <div class="card" style="margin-top:12px">
+        <h3>Lanzar trabajo</h3>
+        <div class="row"><div class="grow"><b>Nueva feature</b><div class="muted">Spec con Spec Kit conmigo (Opus) → plan → tú apruebas</div></div><button class="btn pri" data-hermes-send="/fabrica feature">Empezar</button></div>
+        <div class="row"><div class="grow"><b>Bug</b><div class="muted">Descripción o issue → test que lo reproduce → fix → PR</div></div><button class="btn" data-hermes-send="/fabrica bug">Empezar</button></div>
+        <div class="row"><div class="grow"><b>Incorporar repo</b><div class="muted">Onboarding de un repo maduro (se programa de noche)</div></div><button class="btn" data-hermes-send="/fabrica incorporar">Empezar</button></div>
+        <div class="row"><div class="grow"><b>Diagnosticar repo dormido</b><div class="muted">Estado real antes de decidir si se recupera</div></div><button class="btn" data-hermes-send="/fabrica diagnostico">Empezar</button></div>
+      </div>
+    </div>
+
+    <div>
+      <div class="card">
+        <h3>En marcha <span class="tag">4 / 5</span></h3>
+        <div class="prod">acme</div>
+        <div class="row"><span class="tag">programador · Kimi</span><div class="grow">IMPL-2 orden por tratamientos</div><span class="muted">12 min</span></div>
+        <div class="row"><span class="tag">tester · DeepSeek</span><div class="grow">Revisión de tests IMPL-1 · flakes 3/5</div><span class="muted">4 min</span></div>
+        <div class="prod">tienda</div>
+        <div class="row"><span class="tag">programador · Kimi</span><div class="grow">PR · greploop ronda 2 (Greptile 4/5)</div><span class="muted">31 min</span></div>
+        <div class="prod">ops</div>
+        <div class="row"><span class="tag">explorador · Gemini Flash</span><div class="grow">Incorporar panel-acme</div><span class="muted">🌙 noche</span></div>
+      </div>
+
+      <div class="card" style="margin-top:12px">
+        <h3>Máquina</h3>
+        <div class="row"><span class="muted" style="width:70px">RAM</span><div class="bar"><i style="width:64%"></i></div><span class="muted">20 / 31 GB</span></div>
+        <div class="row"><span class="muted" style="width:70px">CPU</span><div class="bar"><i style="width:38%"></i></div><span class="muted">6 / 16</span></div>
+        <div class="row"><span class="muted" style="width:70px">Suite</span><div class="grow">🔒 tester · acme/feat-casos-por-estado</div><span class="muted">cola: 1</span></div>
+      </div>
+
+      <div class="card" style="margin-top:12px">
+        <h3>Hoy</h3>
+        <div class="row"><div class="grow">DeepSeek (pago)</div><b>0,41 $</b></div>
+        <div class="row"><div class="grow">Kimi · Antigravity · Claude</div><span class="muted">2,1 M tokens · cuota ok</span></div>
+        <div class="row"><div class="grow">PRs mergeados esta semana</div><b>6</b></div>
+      </div>
+    </div>
+  </div>
+</div>

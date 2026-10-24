@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# factory-juntar — junta en la rama de la feature las ramas de sus IMPL hechas en paralelo.
+#
+#   factory-juntar <repo> <feature> <sub1> [sub2 …] [--limpiar]
+#
+# - Se ejecuta sobre el worktree de la feature ($FX_WT/<repo>/<feature>, rama agente/<feature>).
+# - Por cada sub: git merge --no-ff agente/<sub>. Si hay conflicto se PARA con el merge a medias
+#   y la lista de ficheros: resuélvelo (respetando los AC de ambas IMPL), `git commit`, y vuelve a
+#   lanzar factory-juntar con las subs que falten (las ya juntadas se saltan solas).
+# - --limpiar: al terminar todo bien, borra los sub-worktrees, sus ramas y sus BD (factory-prep --limpiar).
+# Nunca toca develop/main ni hace push.
+set -euo pipefail
+FX_WT="${FX_WT:-$HOME/Code/.factory-worktrees}"
+REPO="${1:?repo}"; FEAT="${2:?feature}"; shift 2
+[[ "$REPO" == */* ]] && REPO="${REPO#*/}"
+LIMPIAR=0; SUBS=()
+for a in "$@"; do [[ "$a" == "--limpiar" ]] && LIMPIAR=1 || SUBS+=("$a"); done
+[[ ${#SUBS[@]} -gt 0 ]] || { echo "✗ indica al menos una sub-rama"; exit 2; }
+
+WT="$FX_WT/$REPO/$FEAT"
+[[ -d "$WT" ]] || { echo "✗ no existe el worktree de la feature: $WT"; exit 1; }
+[[ "$(git -C "$WT" branch --show-current)" == "agente/$FEAT" ]] || { echo "✗ $WT no está en agente/$FEAT"; exit 1; }
+if git -C "$WT" rev-parse -q --verify MERGE_HEAD >/dev/null; then
+  echo "✗ hay un merge a medias en $WT: resuélvelo y haz commit antes."; git -C "$WT" diff --name-only --diff-filter=U; exit 3
+fi
+[[ -z "$(git -C "$WT" status --porcelain --untracked-files=no)" ]] || { echo "✗ la feature tiene cambios sin commitear"; exit 1; }
+
+for s in "${SUBS[@]}"; do
+  BR="agente/$s"
+  git -C "$WT" show-ref -q "refs/heads/$BR" || { echo "✗ no existe $BR"; exit 1; }
+  if git -C "$WT" merge-base --is-ancestor "$BR" HEAD; then echo "· $s ya estaba juntada"; continue; fi
+  n=$(git -C "$WT" rev-list --count "HEAD..$BR")
+  if git -C "$WT" merge --no-ff --no-edit -m "Junta $s en $FEAT" "$BR" >/dev/null 2>&1; then
+    echo "✓ $s juntada ($n commits)"
+  else
+    echo "⚠️  CONFLICTO al juntar $s. Ficheros:"; git -C "$WT" diff --name-only --diff-filter=U | sed 's/^/   /'
+    echo "   Resuélvelo en $WT, git add + git commit, y repite: factory-juntar $REPO $FEAT ${SUBS[*]}"
+    exit 3
+  fi
+done
+echo "✓ Todas juntadas en agente/$FEAT. Siguiente: verificación completa (factory-test) en la feature."
+if [[ $LIMPIAR -eq 1 ]]; then
+  for s in "${SUBS[@]}"; do "$(dirname "$0")/factory-prep" --limpiar "$REPO" "$s" && echo "· limpiada $s"; done
+fi

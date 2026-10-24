@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# fabrik: comando paraguas que delega en las herramientas de la fábrica.
+# Uso: fabrik <test|prep|gc|memoria|config> [args...] | fabrik [ayuda|-h|--help]
+set -euo pipefail
+
+ayuda() {
+  cat <<'EOF'
+Uso: fabrik <subcomando> [argumentos...]
+
+Subcomandos:
+  test      Ejecuta suites de tests con turno único            → factory-test
+  prep      Crea worktree (rama + BD propia) de una tarjeta    → factory-prep
+  gc        Limpieza de worktrees y BD huérfanas de la fábrica → factory-gc
+  memoria   Memoria compartida de lecciones entre proyectos    → fabrik-memoria
+  config    Config fusionada (motor < packs < personal)        → scripts/fabrik_config.py
+
+Sin subcomando, o con 'ayuda', '-h' o '--help', muestra esta ayuda.
+EOF
+}
+
+uso_breve() {
+  echo "Uso: fabrik <test|prep|gc|memoria|config> [args...] (o 'fabrik ayuda')" >&2
+}
+
+sub="${1:-}"
+
+case "$sub" in
+  ""|ayuda|-h|--help)
+    ayuda
+    ;;
+  test)
+    shift
+    exec factory-test "$@"
+    ;;
+  prep)
+    shift
+    exec factory-prep "$@"
+    ;;
+  gc)
+    shift
+    exec factory-gc "$@"
+    ;;
+  memoria)
+    shift
+    exec fabrik-memoria "$@"
+    ;;
+  config)
+    shift
+    FABRIK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    exec uv run --with pyyaml python "$FABRIK_DIR/scripts/fabrik_config.py" "$@"
+    ;;
+  *)
+    echo "subcomando desconocido: $sub" >&2
+    uso_breve
+    exit 2
+    ;;
+esac

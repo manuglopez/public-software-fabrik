@@ -1,0 +1,10 @@
+[Unit]
+Description=MariaDB propio de la fábrica (puerto 3307, solo localhost): BD de tests de los agentes, aislada de las del usuario
+[Service]
+Type=notify
+ExecStart=/usr/sbin/mariadbd --no-defaults --datadir=%h/.local/share/fabrica/mariadb --port=3307 --bind-address=127.0.0.1 --socket=%t/fabrica-mariadb.sock --pid-file=%t/fabrica-mariadb.pid --innodb-buffer-pool-size=256M --skip-log-bin --max-connections=200 --max-allowed-packet=64M --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+Restart=on-failure
+MemoryMax=1500M
+Nice=5
+[Install]
+WantedBy=default.target

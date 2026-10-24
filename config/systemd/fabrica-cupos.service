@@ -1,0 +1,9 @@
+[Unit]
+Description=Fábrica: foto de cupos de suscripciones (Kimi, Google, OpenAI) y tokens
+[Service]
+Type=oneshot
+Environment=PATH=%h/.nvm/versions/node/v22.22.2/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+EnvironmentFile=-%h/.config/fabrica/avisos.env
+ExecStart=%h/Code/software-fabrik/bin/fabrik-cupos registrar
+Nice=10
+TimeoutStartSec=240

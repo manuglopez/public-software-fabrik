@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# fabrik-consola — abre una terminal real (con sudo, tinker…) en el worktree de una tarjeta,
+# con la BD propia de la tarjeta (.factory/env) ya cargada.
+#
+#   fabrik-consola <slug>            busca ~/Code/.factory-worktrees/*/<slug>
+#   fabrik-consola <repo> <slug>
+#   fabrik-consola                   lista los worktrees vivos
+# Emulador: $FABRIK_TERMINAL (por defecto gnome-terminal; también kgx, konsole, kitty…)
+set -euo pipefail
+FX_WT="${FX_WT:-$HOME/Code/.factory-worktrees}"
+if [[ $# -eq 0 ]]; then
+  echo "Worktrees de la fábrica:"; for e in "$FX_WT"/*/*/.factory/env; do [[ -f "$e" ]] && d="$(dirname "$(dirname "$e")")" && echo "  $(basename "$(dirname "$d")") $(basename "$d")"; done; exit 0
+fi
+if [[ $# -ge 2 ]]; then WT="$FX_WT/$1/$2"; else WT="$(ls -d "$FX_WT"/*/"$1" 2>/dev/null | head -1)"; fi
+[[ -n "$WT" && -f "$WT/.factory/env" ]] || { echo "✗ no encuentro el worktree '$*' (fabrik-consola sin argumentos lista los que hay)"; exit 1; }
+TITLE="$(basename "$(dirname "$WT")")/$(basename "$WT")"
+INIT="set -a; . '$WT/.factory/env'; set +a; echo '── $TITLE · BD '\$DB_DATABASE' · rama '\$(git branch --show-current); exec \${SHELL:-bash} -i"
+T="${FABRIK_TERMINAL:-gnome-terminal}"
+case "$T" in
+  gnome-terminal) setsid gnome-terminal --working-directory="$WT" --title="$TITLE" -- bash -c "$INIT" >/dev/null 2>&1 & ;;
+  kgx)            setsid kgx --working-directory="$WT" --title="$TITLE" -- bash -c "$INIT" >/dev/null 2>&1 & ;;
+  konsole)        setsid konsole --workdir "$WT" -p tabtitle="$TITLE" -e bash -c "$INIT" >/dev/null 2>&1 & ;;
+  *)              (cd "$WT" && setsid "$T" -e bash -c "$INIT" >/dev/null 2>&1 &) ;;
+esac
+echo "✓ consola abierta en $WT"

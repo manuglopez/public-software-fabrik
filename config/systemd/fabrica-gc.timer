@@ -1,0 +1,7 @@
+[Unit]
+Description=factory-gc cada hora
+[Timer]
+OnCalendar=hourly
+Persistent=true
+[Install]
+WantedBy=timers.target

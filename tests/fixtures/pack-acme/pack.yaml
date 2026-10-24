@@ -1,0 +1,71 @@
+# Pack ficticio para los tests del motor: misma forma que un pack real, datos inventados.
+# Los tests de integración de packs reales viven en packs/<pack>/tests/.
+nombre: acme
+titulo: Fábrica Acme (fixture)
+owners:
+  - acme-org
+extra_repos:
+  - acme-user/herramienta
+tableros:
+  - slug: alfa
+    nombre: Alfa / Producto
+    descripcion: api-acme + web-acme + app-acme + landings
+    icono: "⛳"
+  - slug: beta
+    nombre: Beta
+    descripcion: beta + beta-replay
+    icono: "🛒"
+  - slug: gamma
+    nombre: Gamma
+    descripcion: gamma (colaborador externo)
+    icono: "💈"
+  - slug: delta
+    nombre: Delta
+    descripcion: delta, apps, panel, admin, landings
+    icono: "🎈"
+  - slug: epsilon
+    nombre: Epsilon web
+    descripcion: epsilon
+    icono: "🌐"
+  - slug: herramienta
+    nombre: herramienta
+    descripcion: acme-user/herramienta
+    icono: "🔁"
+  - slug: zeta-drones
+    nombre: Zeta drones
+    descripcion: análisis de vuelos (dormido)
+    icono: "🛸"
+  - slug: acme-ops
+    nombre: Acme ops / fábrica
+    descripcion: motor, memoria, onboarding, mantenimiento
+    icono: "🏭"
+tablero_por_defecto: acme-ops
+repos_calientes:
+  - beta
+  - api-acme
+  - web-acme
+  - gamma
+  - app-acme
+  - panel-acme
+base_por_defecto: develop
+memoria:
+  banco: acme-fabrica
+  nombre: Memoria de la fábrica Acme
+  descripcion: >-
+    Memoria técnica compartida de una fábrica de software multiagente que desarrolla
+    los productos de Acme (api-acme, beta, gamma, delta…) y herramienta. Sirve para
+    reutilizar entre repositorios soluciones, causas raíz, decisiones, convenciones
+    y trampas.
+# Pool de modelos del fixture: nombres inventados, proveedores ya exigidos por el motor
+# (no añade requisitos al `--comprobar`). `permitir_pago: true`: los `coste: pago` entran en la tabla.
+modelos:
+  permitir_pago: true
+  reserva_final: {proveedor: antigravity-oauth, modelo: acme-reserva}
+  pool:
+    ligero:
+      - {proveedor: antigravity-oauth, modelo: acme-ligero, herramientas: false, coste: suscripcion}
+    medio:
+      - {proveedor: antigravity-oauth, modelo: acme-medio, herramientas: true, coste: suscripcion}
+      - {proveedor: antigravity-oauth, modelo: acme-medio-pago, herramientas: true, coste: pago}
+    dificil:
+      - {proveedor: antigravity-oauth, modelo: acme-dificil, herramientas: true, coste: suscripcion}

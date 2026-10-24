@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# factory-gc — limpia los puestos de trabajo de la fábrica cuyo trabajo ya terminó.
+#
+#   factory-gc            informe + limpieza (lo lanza el timer fabrica-gc cada hora)
+#   factory-gc --seco     solo informe, no borra nada
+#
+# Por cada worktree de $FX_WT/<repo>/<slug> (solo los que tienen .factory/env, creados por factory-prep):
+#   PR MERGED o CLOSED          → borra worktree, rama local y BD(s) fx_<repo>_<slug>* (incluye las de paratest)
+#   PR OPEN                     → se conserva (hace falta para los comentarios de Greptile / CI)
+#   sin PR y > FX_GC_DIAS días  → se avisa, NO se borra (puede ser trabajo en curso o abandonado: decide el usuario)
+# Nunca borra si hay commits sin subir o cambios sin commitear: avisa.
+# BD huérfanas fx_* sin worktree → se borran.
+set -uo pipefail
+FX_WT="${FX_WT:-$HOME/Code/.factory-worktrees}"
+DIAS="${FX_GC_DIAS:-7}"; SECO=0; [[ "${1:-}" == "--seco" ]] && SECO=1
+DBENV="$HOME/.config/fabrica/db.env"; . "$DBENV"
+export GH_CONFIG_DIR="${GH_CONFIG_DIR:-$HOME/.config/gh}"
+FABRIK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cfg() { uv run --with pyyaml python "$FABRIK_DIR/scripts/fabrik_config.py" "$@" || true; }
+# owner por defecto: FX_ORG > primer `owners` de la config (el remoto del worktree manda si está)
+ORG="${FX_ORG:-$(cfg get owners | head -1)}"
+# si la config falló, cfg() devuelve vacío: no seguir con ORG vacío (formaría «/repo» al consultar PRs)
+[[ -n "$ORG" ]] || { echo "✗ no pude determinar el propietario (owners) de la config: revisa 'fabrik config ver' o define FX_ORG" >&2; exit 2; }
+sql() { mariadb -N -h"${FX_DB_HOST:-127.0.0.1}" -P"${FX_DB_PORT:-3307}" -u"${FX_DB_USER:-fx}" -p"$FX_DB_PASSWORD" -e "$1"; }
+log() { echo "$(date '+%F %T') $*"; }
+
+declare -A VIVAS=()
+for envf in "$FX_WT"/*/*/.factory/env; do
+  [[ -f "$envf" ]] || continue
+  WT="$(dirname "$(dirname "$envf")")"; SLUG="$(basename "$WT")"; REPO="$(basename "$(dirname "$WT")")"
+  DB="$(grep -oP '^DB_DATABASE=\K.*' "$envf")"; BR="agente/$SLUG"
+  # propietario/repo real a partir del remoto del worktree (org/…, usuario/…)
+  SLUGGH="$(git -C "$WT" remote get-url origin 2>/dev/null | sed -E 's#^(git@github\.com:|https://github\.com/)##; s#\.git$##')"
+  [[ "$SLUGGH" == */* ]] || SLUGGH="$ORG/$REPO"
+  ESTADO="$(gh pr list -R "$SLUGGH" --head "$BR" --state all --json state,number --jq 'sort_by(.number)|last|.state+" #"+(.number|tostring)' 2>/dev/null)"
+  SUCIO="$(git -C "$WT" status --porcelain --untracked-files=no 2>/dev/null | head -1)"
+  SINSUBIR="$(git -C "$WT" log --oneline "origin/$BR..HEAD" 2>/dev/null | head -1)"
+  case "$ESTADO" in
+    MERGED*|CLOSED*)
+      if [[ -n "$SUCIO" ]]; then log "⚠ $REPO/$SLUG ($ESTADO) tiene cambios sin commitear: NO se borra"; VIVAS[$DB]=1; continue; fi
+      if [[ "$ESTADO" == CLOSED* && -n "$SINSUBIR" ]]; then log "⚠ $REPO/$SLUG ($ESTADO) tiene commits sin subir: NO se borra"; VIVAS[$DB]=1; continue; fi
+      if (( SECO )); then log "· borraría $REPO/$SLUG ($ESTADO) y BD $DB*"; VIVAS[$DB]=1; continue; fi
+      git -C "$WT" worktree remove --force "$WT" && git -C "$(dirname "$WT")/_repo" branch -D "$BR" -q 2>/dev/null
+      # solo BD propias fx_*; las de nombre fijo exigido por el suite (p. ej. api_acme_test) se comparten y se quedan
+      for d in $(sql "SHOW DATABASES" | grep -E '^fx_' | grep -E "^${DB}(_test_[0-9]+)?$"); do sql "DROP DATABASE \`$d\`"; done
+      log "✓ limpiado $REPO/$SLUG ($ESTADO): worktree, rama local y BD $DB*" ;;
+    OPEN*)
+      VIVAS[$DB]=1; log "· $REPO/$SLUG: PR abierto ($ESTADO), se conserva" ;;
+    *)
+      VIVAS[$DB]=1
+      EDAD=$(( ( $(date +%s) - $(stat -c %Y "$envf") ) / 86400 ))
+      if (( EDAD >= DIAS )); then log "⚠ $REPO/$SLUG sin PR desde hace ${EDAD} días: revisar (factory-prep --limpiar $REPO $SLUG)"
+      else log "· $REPO/$SLUG sin PR todavía (${EDAD} d), en curso"; fi ;;
+  esac
+done
+
+# BD huérfanas (fx_* sin worktree vivo)
+for d in $(sql "SHOW DATABASES" | grep -E '^fx_'); do
+  base="${d%%_test_[0-9]*}"
+  [[ -n "${VIVAS[$base]:-}" ]] && continue
+  if (( SECO )); then log "· borraría BD huérfana $d"; else sql "DROP DATABASE \`$d\`"; log "✓ BD huérfana borrada: $d"; fi
+done
+for b in "$FX_WT"/*/_repo; do [[ -d "$b" ]] && git -C "$b" worktree prune; done
+exit 0

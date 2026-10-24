@@ -1,0 +1,9 @@
+# Falsos positivos justificados del test guardián (tests/sin_privado_test.sh).
+# Formato: ruta|fragmento  # motivo   (ruta `*` = cualquier fichero; sin fragmento = fichero entero). El motivo es obligatorio.
+
+LICENSE|manuglopez  # titular del copyright (MIT): el nombre del autor debe figurar en la licencia
+*|github.com  # host público del servicio de código (clones, credenciales, enlaces a Spec Kit): no es un host privado
+*|api.cloudflare.com  # API pública de Cloudflare usada por fabrik-prod para purgar caché
+.gitignore|maquina.local.yaml  # nombre de fichero de configuración local ignorado por git, no un host
+bin/fabrik-cupos|api.kimi.com  # host público de la API de uso (cupos) de Kimi
+*|hermes-agent.nousresearch.com  # documentación pública de Hermes Agent (enlace del README): no es un host privado

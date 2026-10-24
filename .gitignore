@@ -1,0 +1,19 @@
+# datos y secretos: nunca en el repo
+.env
+*.env
+config/maquina.local.yaml
+portfolio.yaml
+*.db
+*.sqlite
+locks/
+logs/
+__pycache__/
+.worktrees/
+
+# packs: el motor solo lleva el pack de ejemplo. Los de cada organización viven en su propio repo y se instalan con
+# `./install.sh --pack <repo|carpeta>` en $FABRIK_DATA/packs (D-P3); aquí nunca se versionan.
+packs/*
+!packs/ejemplo/
+
+# lecciones compartidas: viven en el repo del pack o en $FABRIK_DATA, nunca en el motor
+/conocimiento/

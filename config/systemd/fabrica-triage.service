@@ -1,0 +1,15 @@
+[Unit]
+Description=Fábrica: enrutador inmediato de tarjetas creadas en la app (Triage / sin agente) → orquestador
+After=hermes-gateway.service
+[Service]
+Type=simple
+Environment=PATH=%h/Code/software-fabrik/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=%h/Code/software-fabrik/bin/fabrik-triage
+StandardOutput=append:%h/.hermes/factory/logs/triage.log
+StandardError=append:%h/.hermes/factory/logs/triage.log
+Restart=always
+RestartSec=5
+Nice=10
+MemoryMax=300M
+[Install]
+WantedBy=default.target

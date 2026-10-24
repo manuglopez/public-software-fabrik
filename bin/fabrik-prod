@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# fabrik-prod — ÚNICA vía de los agentes a producción: acciones de una lista cerrada por proyecto.
+#
+#   fabrik-prod lista                       proyectos y acciones permitidas
+#   fabrik-prod <proyecto> <accion>         p. ej.  fabrik-prod api-acme config:cache
+#
+# - Config por máquina (no va al repo): ~/.config/fabrica/prod.conf  (ejemplo: config/prod.conf.ejemplo)
+#     [api-acme]
+#     host=servidor-acme                         # alias de ~/.ssh/config
+#     path=/srv/api-acme/current
+#     acciones=config:cache horizon:terminate responsecache:clear
+#     cloudflare=servidor                        # cloudflare:purge con el token del .env del servidor ("si" = token local)
+# - Cada acción `x:y` ejecuta EXACTAMENTE `php artisan x:y` en <path> (sin argumentos, sin shell libre).
+#   `cloudflare:purge` purga la caché de la zona vía API (token con permiso solo de Cache Purge).
+# - Una acción a la vez por proyecto. Todo queda en ~/.hermes/factory/logs/prod.log y, si se lanza desde una
+#   tarjeta (HERMES_KANBAN_TASK), como comentario en la tarjeta.
+set -uo pipefail
+CONF="${FABRIK_PROD_CONF:-$HOME/.config/fabrica/prod.conf}"
+CFENV="$HOME/.config/fabrica/cloudflare.env"
+LOG="${FABRIK_DATA:-$HOME/.hermes/factory}/logs/prod.log"; mkdir -p "$(dirname "$LOG")"
+[[ -f "$CONF" ]] || { echo "✗ falta $CONF (ver config/prod.conf.ejemplo)"; exit 2; }
+
+ini() { awk -v s="[$1]" -v k="$2" '$0==s{f=1;next} /^\[/{f=0} f && $0 ~ "^"k"=" {sub("^"k"=",""); sub(/[ \t]+#.*$/,""); print; exit}' "$CONF"; }
+
+if [[ "${1:-}" == "lista" || $# -eq 0 ]]; then
+  for p in $(grep -oP '^\[\K[^]]+' "$CONF"); do
+    extra=""; [[ "$(ini "$p" cloudflare)" =~ ^(si|servidor)$ ]] && extra=" cloudflare:purge"
+    echo "$p: $(ini "$p" acciones)$extra"
+  done; exit 0
+fi
+
+P="$1"; A="${2:-}"
+[[ $# -eq 2 ]] || { echo "✗ uso: fabrik-prod <proyecto> <accion>   (sin argumentos extra)"; exit 2; }
+HOST="$(ini "$P" host)"; RUTA="$(ini "$P" path)"; ACC=" $(ini "$P" acciones) "
+[[ -n "$HOST" && -n "$RUTA" ]] || { echo "✗ proyecto '$P' no configurado en $CONF"; exit 2; }
+[[ "$A" =~ ^[a-z][a-z0-9:-]*$ ]] || { echo "✗ acción inválida"; exit 2; }
+QUIEN="${HERMES_PROFILE:-$USER}"; TAREA="${HERMES_KANBAN_TASK:-}"; BOARD="${HERMES_KANBAN_BOARD:-}"
+
+exec 9>"${LOG%.log}.$P.lock"; flock -w 300 9 || { echo "✗ otra acción en prod de $P en curso"; exit 75; }
+INI=$(date +%s)
+if [[ "$A" == "log:errores" ]]; then
+  # SOLO LECTURA: últimas 60 entradas ERROR/CRITICAL/ALERT/EMERGENCY del log diario de Laravel (hoy y ayer), recortadas.
+  [[ "$ACC" == *" log:errores "* ]] || { echo "✗ 'log:errores' no está permitida en $P"; exit 3; }
+  OUT="$(timeout 60 ssh -o BatchMode=yes -o ConnectTimeout=15 "$HOST" "cd '$RUTA' && \
+for f in storage/logs/laravel-\$(date -d yesterday +%F).log storage/logs/laravel-\$(date +%F).log storage/logs/laravel.log; do \
+ [ -f \"\$f\" ] && grep -E '^\[[0-9-]+ [0-9:]+\] [a-z]+\.(ERROR|CRITICAL|ALERT|EMERGENCY)' \"\$f\"; done | tail -n 60 | cut -c1-500" 2>&1)"; RC=$?
+elif [[ "$A" == "cloudflare:purge" && "$(ini "$P" cloudflare)" == "servidor" ]]; then
+  # El token NO sale del servidor: se lee de CLOUDFLARE_ZONE_ID / CLOUDFLARE_API_TOKEN del .env de la app allí.
+  OUT="$(timeout 120 ssh -o BatchMode=yes -o ConnectTimeout=15 "$HOST" "cd '$RUTA' && \
+Z=\$(grep -E '^CLOUDFLARE_ZONE_ID=' .env | cut -d= -f2- | tr -d '\"'\"'\"' ') && \
+T=\$(grep -E '^CLOUDFLARE_API_TOKEN=' .env | cut -d= -f2- | tr -d '\"'\"'\"' ') && \
+curl -sS -X POST \"https://api.cloudflare.com/client/v4/zones/\$Z/purge_cache\" -H \"Authorization: Bearer \$T\" \
+ -H 'Content-Type: application/json' --data '{\"purge_everything\":true}'" 2>&1)"
+  echo "$OUT" | grep -q '"success":[ ]*true'; RC=$?
+  OUT="$(echo "$OUT" | grep -oE '"success":[ ]*(true|false)|"message":"[^"]*"' | head -3)"
+elif [[ "$A" == "cloudflare:purge" ]]; then
+  [[ "$(ini "$P" cloudflare)" == "si" && -f "$CFENV" ]] || { echo "✗ cloudflare no habilitado para $P"; exit 2; }
+  . "$CFENV"; ZV="CF_ZONE_$(echo "$P" | tr 'a-z-' 'A-Z_')"; ZONE="${!ZV:-}"
+  [[ -n "${CF_API_TOKEN:-}" && -n "$ZONE" ]] || { echo "✗ faltan CF_API_TOKEN o $ZV en $CFENV"; exit 2; }
+  OUT="$(curl -sS -X POST "https://api.cloudflare.com/client/v4/zones/$ZONE/purge_cache" \
+        -H "Authorization: Bearer $CF_API_TOKEN" -H "Content-Type: application/json" --data '{"purge_everything":true}' 2>&1)"
+  echo "$OUT" | grep -q '"success":true'; RC=$?
+else
+  [[ "$ACC" == *" $A "* ]] || { echo "✗ '$A' no está permitida en $P. Permitidas:$ACC"; exit 3; }
+  OUT="$(timeout 300 ssh -o BatchMode=yes -o ConnectTimeout=15 "$HOST" "cd '$RUTA' && php artisan $A --no-interaction" 2>&1)"; RC=$?
+fi
+DUR=$(( $(date +%s) - INI ))
+RES="$( [[ $RC -eq 0 ]] && echo OK || echo "FALLO rc=$RC" )"
+printf '%s %s %s/%s %s %s (%ss) tarjeta=%s\n%s\n' "$(date '+%F %T')" "$QUIEN" "$P" "$HOST" "$A" "$RES" "$DUR" "${TAREA:--}" "$(echo "$OUT" | tail -15 | sed 's/^/    /')" >> "$LOG"
+echo "── prod $P: $A → $RES (${DUR}s)"; echo "$OUT" | tail -15
+if [[ -n "$TAREA" ]]; then
+  hermes kanban ${BOARD:+--board "$BOARD"} comment "$TAREA" "🚀 **prod $P**: \`$A\` → **$RES** (${DUR}s) — por $QUIEN" >/dev/null 2>&1 || true
+fi
+exit $RC

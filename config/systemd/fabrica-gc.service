@@ -1,0 +1,7 @@
+[Unit]
+Description=Limpieza de worktrees y BD de la fábrica (PR mergeado/cerrado)
+[Service]
+Type=oneshot
+Environment=PATH=%h/Code/software-fabrik/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/bin/sh -c 'mkdir -p %h/.hermes/factory/logs && exec %h/Code/software-fabrik/bin/factory-gc >> %h/.hermes/factory/logs/gc.log 2>&1'
+Nice=15

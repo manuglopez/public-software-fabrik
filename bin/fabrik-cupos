@@ -1,0 +1,321 @@
+#!/usr/bin/env python3
+"""fabrik-cupos — mide el cupo de las suscripciones y lo cruza con los tokens gastados.
+
+  fabrik-cupos registrar                         foto ahora (lo lanza el timer fabrica-cupos cada 10 min) → ~/.hermes/factory/logs/cupos.jsonl
+  fabrik-cupos                                   informe: % usado ahora y tokens por cada 1 % (→ estimación del total de cada bolsa)
+  fabrik-cupos rate-limited [--dias N] [--json]  métrica de rate_limited y esperas por día y tablero
+
+Bolsas: Kimi (5 h y 7 d, API /usages), Google Antigravity (Gemini 5 h/semanal, «Claude y GPT» 5 h/semanal,
+Gemini 4 Argon semanal; `agy -p /quota`), OpenAI ChatGPT (bolsa de 30 días; sondeo de Hermes).
+Tokens: suma de las sesiones de Hermes (todos los perfiles) por familia de modelo/proveedor. Lo que gastes
+fuera de Hermes (agy, ChatGPT web, Codex) también consume cupo y no sale en los tokens → la estimación es
+una cota inferior de lo que da cada bolsa.
+"""
+import argparse, glob, json, os, re, sqlite3, subprocess, sys, time, urllib.request
+from datetime import datetime, timedelta, timezone
+
+H = os.path.expanduser("~")
+LOG = f"{H}/.hermes/factory/logs/cupos.jsonl"
+# familia de tokens → (SQL sobre sessions)
+FAMILIAS = {
+    "kimi":        "model LIKE 'kimi%'",
+    "gemini":      "model LIKE 'gemini-3%'",
+    "argon":       "model LIKE 'gemini-4-argon%'",
+    "agy-claude":  "billing_provider LIKE 'antigravity%' AND (model LIKE 'claude%' OR model LIKE 'gpt-oss%')",
+    "openai":      "billing_provider = 'openai-codex' OR model LIKE 'gpt-6%' OR model LIKE 'gpt-5.6%'",
+    "claude":      "model LIKE 'claude%' AND coalesce(billing_provider,'') NOT LIKE 'antigravity%'",
+}
+# bolsa → familia de tokens que la consume
+BOLSA_FAMILIA = {"kimi_5h": "kimi", "kimi_7d": "kimi", "gemini_5h": "gemini", "gemini_sem": "gemini",
+                 "agy_claude_5h": "agy-claude", "agy_claude_sem": "agy-claude", "argon_sem": "argon",
+                 "openai_30d": "openai", "claude_5h": "claude", "claude_sem": "claude"}
+
+
+def env(k):
+    for line in open(f"{H}/.hermes/.env"):
+        if line.startswith(k + "="):
+            return line.split("=", 1)[1].strip().strip('"')
+
+
+def kimi():
+    req = urllib.request.Request("https://api.kimi.com/coding/v1/usages",
+                                 headers={"Authorization": f"Bearer {env('KIMI_API_KEY')}"})
+    d = json.loads(urllib.request.urlopen(req, timeout=20).read())
+    u = d.get("usages", {})
+    return {"kimi_5h": (round(100 * u["limit_5h"]["used_ratio"], 1), u["limit_5h"]["reset_time"]),
+            "kimi_7d": (round(100 * u["limit_7d"]["used_ratio"], 1), u["limit_7d"]["reset_time"])}
+
+
+def google():
+    out = subprocess.run(["agy", "-p", "/quota", "--print-timeout", "50s"], capture_output=True, text=True,
+                         timeout=70, cwd=f"{H}/.hermes/cache/scratch").stdout
+    res = {}
+    for line in out.splitlines():
+        p = line.split("\t")
+        if len(p) < 4 or not p[2].endswith("%"):
+            continue
+        usado = 100 - float(p[2].rstrip("%"))
+        grupo, vent = p[0].lower(), p[1].lower()
+        k = ("argon" if "argon" in grupo else "agy_claude" if "claude" in grupo else "gemini") + \
+            ("_5h" if "five" in vent else "_sem")
+        res[k] = (usado, p[3])
+    return res
+
+
+def openai():
+    py = sorted(glob.glob(f"{H}/.hermes/installs/*/environments/*/venv/bin/python"))[0]
+    code = ("from agent.account_usage import fetch_account_usage as f; import json; r=f('openai-codex');"
+            "w=r.raw['rate_limit']['primary_window']; print(json.dumps([w['used_percent'], w['reset_at']]))")
+    out = subprocess.run([py, "-c", code], capture_output=True, text=True, timeout=60,
+                         cwd=f"{H}/.hermes/hermes-agent",
+                         env={**os.environ, "PYTHONPATH": f"{H}/.hermes/hermes-agent"}).stdout.strip().splitlines()
+    pct, reset = json.loads(out[-1])
+    return {"openai_30d": (float(pct), datetime.fromtimestamp(reset, timezone.utc).isoformat())}
+
+
+def anthropic():
+    py = sorted(glob.glob(f"{H}/.hermes/installs/*/environments/*/venv/bin/python"))[0]
+    code = ("from agent.account_usage import fetch_account_usage as f; import json; r=f('anthropic');"
+            "print(json.dumps([[w.label, w.used_percent, str(w.reset_at)] for w in r.windows]))")
+    out = subprocess.run([py, "-c", code], capture_output=True, text=True, timeout=60,
+                         cwd=f"{H}/.hermes/hermes-agent",
+                         env={**os.environ, "PYTHONPATH": f"{H}/.hermes/hermes-agent"}).stdout.strip().splitlines()
+    res = {}
+    for label, pct, reset in json.loads(out[-1]):
+        k = "claude_5h" if "session" in label.lower() else "claude_sem" if label.lower() == "current week" else None
+        if k:
+            res[k] = (float(pct), reset)
+    return res
+
+
+def tokens():
+    tot = {f: [0, 0, 0] for f in FAMILIAS}
+    dbs = glob.glob(f"{H}/.hermes/profiles/*/state.db") + [f"{H}/.hermes/state.db"]
+    for db in dbs:
+        try:
+            c = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
+            for f, cond in FAMILIAS.items():
+                r = c.execute(f"SELECT sum(coalesce(input_tokens,0)), sum(coalesce(output_tokens,0)),"
+                              f" sum(coalesce(cache_read_tokens,0)) FROM sessions WHERE {cond}").fetchone()
+                for i in range(3):
+                    tot[f][i] += r[i] or 0
+        except sqlite3.Error:
+            pass
+    return tot  # [entrada nueva, salida, leída de caché] acumulados
+
+
+def registrar():
+    foto = {"t": time.time(), "bolsas": {}, "tokens": tokens(), "errores": {}}
+    for nombre, fn in (("kimi", kimi), ("google", google), ("openai", openai), ("anthropic", anthropic)):
+        try:
+            foto["bolsas"].update(fn())
+        except Exception as e:  # una fuente caída no impide registrar las demás
+            foto["errores"][nombre] = str(e)[:200]
+    os.makedirs(os.path.dirname(LOG), exist_ok=True)
+    with open(LOG, "a") as f:
+        f.write(json.dumps(foto) + "\n")
+    avisar_umbrales(foto)
+    return foto
+
+
+# Aviso al privado (una vez por bolsa y umbral) cuando una bolsa pasa del umbral.
+UMBRALES = {"openai_30d": [30, 50, 75], "claude_sem": [85, 95], "kimi_7d": [75, 90], "gemini_sem": [75, 90], "agy_claude_sem": [75, 90]}
+
+
+def avisar_umbrales(foto):
+    est_f = f"{H}/.hermes/factory/logs/cupos-avisos.json"
+    try:
+        est = json.load(open(est_f))
+    except (OSError, ValueError):
+        est = {}
+    for b, umbrales in UMBRALES.items():
+        if b not in foto["bolsas"]:
+            continue
+        pct, reset = foto["bolsas"][b]
+        for u in umbrales:
+            clave = f"{b}:{u}:{reset[:10]}"
+            if pct >= u and clave not in est:
+                subprocess.run(["hermes", "send", "-t", os.environ.get("FABRIK_AVISO", "telegram"),
+                                f"📊 Cupo {b}: {pct:.0f}% usado (umbral {u}%). Se renueva {reset[:16]}. "
+                                f"Detalle: fabrik-cupos"], capture_output=True, timeout=60)
+                est[clave] = time.time()
+    json.dump(est, open(est_f, "w"))
+
+
+def informe():
+    fotos = [json.loads(l) for l in open(LOG)] if os.path.exists(LOG) else []
+    if not fotos:
+        fotos = [registrar()]
+    ult = fotos[-1]
+    print(f"Última foto: {datetime.fromtimestamp(ult['t']):%d/%m %H:%M} · {len(fotos)} fotos")
+    print(f"{'bolsa':16} {'usado':>6}  {'renueva':16} {'tokens por 1 %':>16}  {'≈ bolsa entera':>15}")
+    for b, (pct, reset) in sorted(ult["bolsas"].items()):
+        fam = BOLSA_FAMILIA.get(b)
+        # tramos consecutivos dentro de la misma ventana (mismo reset) en que el % sube
+        dt_tok = dt_pct = 0.0
+        for a, z in zip(fotos, fotos[1:]):
+            pa, pz = a["bolsas"].get(b), z["bolsas"].get(b)
+            if not pa or not pz or pa[1][:13] != pz[1][:13] or pz[0] <= pa[0]:
+                continue
+            ta, tz = a["tokens"][fam], z["tokens"][fam]
+            dt_tok += (tz[0] - ta[0]) + (tz[1] - ta[1]) + (tz[2] - ta[2])
+            dt_pct += pz[0] - pa[0]
+        por = f"{dt_tok / dt_pct / 1e6:8.2f} M" if dt_pct else "  (midiendo)"
+        total = f"{dt_tok / dt_pct * 100 / 1e6:8.0f} M" if dt_pct else ""
+        try:
+            r = datetime.fromisoformat(reset.replace("Z", "+00:00")).astimezone().strftime("%d/%m %H:%M")
+        except ValueError:
+            r = reset[:16]
+        print(f"{b:16} {pct:5.1f}%  {r:16} {por:>16}  {total:>15}")
+    if ult.get("errores"):
+        print("errores:", ult["errores"])
+    print("Tokens = entrada nueva + salida + leída de caché (las suscripciones no dicen cómo pondera cada una).")
+    tot_7d, tot_hoy = resumen_rate_limited()
+    print(f"rate_limited últimos 7 días: {tot_7d} (hoy {tot_hoy}) · detalle: fabrik-cupos rate-limited")
+
+
+def parse_payload_reason(payload):
+    if not payload:
+        return ""
+    try:
+        d = json.loads(payload)
+        if isinstance(d, dict):
+            return str(d.get("reason") or "")
+        return str(d)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return str(payload)
+
+
+def obtener_metricas(dias=7):
+    if hasattr(time, "tzset"):
+        time.tzset()
+    dias = max(1, dias)
+    hoy = datetime.now().date()
+    dias_lista = [(hoy - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(dias)]
+    dias_set = set(dias_lista)
+
+    boards_dir = os.environ.get("FABRIK_KANBAN_BOARDS", f"{H}/.hermes/kanban/boards")
+    board_dbs = sorted(glob.glob(os.path.join(boards_dir, "*", "kanban.db")))
+
+    rl_counts = {d: {} for d in dias_lista}
+    esp_counts = {d: {} for d in dias_lista}
+    tableros_con_datos = set()
+
+    for db_path in board_dbs:
+        tablero = os.path.basename(os.path.dirname(db_path))
+        try:
+            conn = sqlite3.connect(f"file:{os.path.abspath(db_path)}?mode=ro", uri=True, timeout=5)
+            # 1. Ejecuciones rate_limited en task_runs
+            cur = conn.execute("SELECT started_at, ended_at FROM task_runs WHERE outcome = 'rate_limited'")
+            for started_at, ended_at in cur:
+                ts = ended_at if (ended_at is not None and ended_at > 0) else started_at
+                if ts and ts > 0:
+                    fecha = datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
+                    if fecha in dias_set:
+                        rl_counts[fecha][tablero] = rl_counts[fecha].get(tablero, 0) + 1
+                        tableros_con_datos.add(tablero)
+
+            # 2. Esperas por cupo en task_events
+            try:
+                cur = conn.execute("SELECT payload, created_at FROM task_events WHERE kind = 'scheduled'")
+                for payload, ts in cur:
+                    if not ts or ts <= 0:
+                        continue
+                    reason = parse_payload_reason(payload)
+                    if reason.startswith("⏳ esperando cupo"):
+                        fecha = datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
+                        if fecha in dias_set:
+                            esp_counts[fecha][tablero] = esp_counts[fecha].get(tablero, 0) + 1
+                            tableros_con_datos.add(tablero)
+            except sqlite3.OperationalError:
+                pass
+            conn.close()
+        except Exception as e:
+            sys.stderr.write(f"aviso: fallo leyendo tablero {tablero}: {e}\n")
+            continue
+
+    tableros_con_datos = sorted(tableros_con_datos)
+    return dias_lista, tableros_con_datos, rl_counts, esp_counts
+
+
+def resumen_rate_limited():
+    dias_lista, _, rl_counts, _ = obtener_metricas(dias=7)
+    hoy = dias_lista[0] if dias_lista else ""
+    tot_7d = sum(sum(rl_counts[d].values()) for d in dias_lista)
+    tot_hoy = sum(rl_counts[hoy].values()) if hoy else 0
+    return tot_7d, tot_hoy
+
+
+def rate_limited_json(dias=7):
+    dias_lista, tableros_con_datos, rl_counts, esp_counts = obtener_metricas(dias)
+    res = {
+        "dias": {
+            dia: {t: rl_counts[dia].get(t, 0) for t in tableros_con_datos}
+            for dia in dias_lista
+        },
+        "esperas": {
+            dia: {t: esp_counts[dia].get(t, 0) for t in tableros_con_datos}
+            for dia in dias_lista
+        }
+    }
+    return json.dumps(res, indent=2, ensure_ascii=False)
+
+
+def rate_limited_tabla(dias=7):
+    dias_lista, tableros_con_datos, rl_counts, esp_counts = obtener_metricas(dias)
+    col_w = {t: max(len(t), 5) for t in tableros_con_datos}
+    total_w = 7
+    esp_w = 16  # len("esperas por cupo")
+
+    headers = [f"{'fecha':10}"]
+    for t in tableros_con_datos:
+        headers.append(f"{t:>{col_w[t]}}")
+    headers.append(f"{'total':>{total_w}}")
+    headers.append(f"{'esperas por cupo':>{esp_w}}")
+    lineas = ["  ".join(headers)]
+
+    tot_col_rl = {t: 0 for t in tableros_con_datos}
+    gran_total_rl = 0
+    gran_total_esp = 0
+
+    for dia in dias_lista:
+        row_rl = sum(rl_counts[dia].get(t, 0) for t in tableros_con_datos)
+        row_esp = sum(esp_counts[dia].get(t, 0) for t in tableros_con_datos)
+        gran_total_rl += row_rl
+        gran_total_esp += row_esp
+
+        row = [f"{dia:10}"]
+        for t in tableros_con_datos:
+            cnt = rl_counts[dia].get(t, 0)
+            tot_col_rl[t] += cnt
+            row.append(f"{cnt:>{col_w[t]}}")
+        row.append(f"{row_rl:>{total_w}}")
+        row.append(f"{row_esp:>{esp_w}}")
+        lineas.append("  ".join(row))
+
+    row_final = [f"{'total':10}"]
+    for t in tableros_con_datos:
+        row_final.append(f"{tot_col_rl[t]:>{col_w[t]}}")
+    row_final.append(f"{gran_total_rl:>{total_w}}")
+    row_final.append(f"{gran_total_esp:>{esp_w}}")
+    lineas.append("  ".join(row_final))
+
+    return "\n".join(lineas)
+
+
+if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "registrar":
+        f = registrar()
+        print(json.dumps({"bolsas": f["bolsas"], "errores": f["errores"]}, ensure_ascii=False))
+    elif len(sys.argv) > 1 and sys.argv[1] == "rate-limited":
+        parser = argparse.ArgumentParser(prog="fabrik-cupos rate-limited",
+                                         description="Métrica de rate_limited por día y tablero.")
+        parser.add_argument("--dias", "-d", type=int, default=7, help="Número de días a consultar (defecto: 7)")
+        parser.add_argument("--json", action="store_true", help="Salida en formato JSON")
+        args = parser.parse_args(sys.argv[2:])
+        if args.json:
+            print(rate_limited_json(dias=args.dias))
+        else:
+            print(rate_limited_tabla(dias=args.dias))
+    else:
+        informe()
