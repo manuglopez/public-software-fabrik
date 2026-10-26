@@ -1,0 +1,13 @@
+{
+  "cadenas": [
+    {"board": "demo", "titulo": "The Factory", "hechas": 1, "total": 5,
+     "nodos": [
+       {"task_id": "t_base", "etiqueta": "BASE", "estado": "hecho"},
+       {"task_id": "t_cie", "etiqueta": "CIERRE-2", "estado": "pendiente"},
+       {"task_id": "t_im2", "etiqueta": "IMPL-2", "estado": "en_marcha", "minutos": 12},
+       {"task_id": "t_im3", "etiqueta": "IMPL-3", "estado": "en_marcha", "minutos": 90, "worktree": "/w/.factory-worktrees/r/a"},
+       {"task_id": "t_pr2", "etiqueta": "PR-2", "estado": "pendiente"}
+     ],
+     "aristas": [["t_base", "t_im2"], ["t_base", "t_im3"], ["t_im2", "t_cie"], ["t_im3", "t_cie"], ["t_cie", "t_pr2"]]}
+  ]
+}

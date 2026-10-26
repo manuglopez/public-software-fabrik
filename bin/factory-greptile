@@ -1,0 +1,185 @@
+#!/usr/bin/env bash
+# factory-greptile — envoltorio del CLI local de Greptile (~1 $ por ejecución) con tope por rama, caché por diff y registro.
+#
+#   factory-greptile -b <base> [resto de argumentos de «greptile review»…]
+#
+# Se lanza dentro de un worktree git. `-b <base>` es obligatorio. Llama a «$BIN review "$@"» con los mismos argumentos.
+#   Árbol sucio  → no ejecuta (greptile solo revisa commits), exit 2, registro «sucio»; no consume tope.
+#   Caché        → mismo HEAD y mismo merge-base con <base> que una ejecución buena anterior: imprime la salida
+#                  guardada y sale con su rc, sin ejecutar (registro «cache»).
+#   PR abierto   → la rama ya tiene un PR abierto (`gh pr list --head <rama> --state open`): no ejecuta, exit 3 (registro
+#                  «pr_abierto»). Va tras la caché (el mismo diff devuelve lo guardado) y antes del tope. Si `gh` falla
+#                  (rc≠0 o no está), avisa por stderr y sigue: el tope acota el daño. `gh` = $FABRIK_GH (por defecto gh).
+#   Tope         → ejecuciones reales ya registradas para el mismo repo y rama >= FX_GREPTILE_TOPE (por defecto 1;
+#                  entero >= 0, si no es válido vale 1): no ejecuta, exit 3 (registro «tope»). Las rondas del PR las
+#                  revisa el Greptile de GitHub en cada push. No hay --forzar: subir el tope es decisión humana.
+#   Si no       → ejecuta, imprime la salida (stdout+stderr), sale con su rc y registra «ejecutado» (también con rc≠0:
+#                  se ha pagado, cuenta para el tope). Solo se cachea con rc=0.
+#
+# Registro: una línea JSON por llamada en $FABRIK_GREPTILE_LOG (por defecto $HOME/.hermes/factory/logs/greptile.jsonl):
+#   {"t": <epoch>, "repo": "<owner>/<repo>", "rama": "…", "sha": "<HEAD>", "base": "<merge-base>", "evento": "…", "rc": N}
+# Caché: $FABRIK_GREPTILE_CACHE (por defecto $HOME/.hermes/factory/cache/greptile)/<owner>__<repo>/<rama>/<HEAD>-<merge-base>.{out,rc}
+# Binario real: $FABRIK_GREPTILE_BIN (por defecto, el primer «greptile» del PATH que no viva en el directorio de este
+# script: ahí está el envoltorio bin/greptile, que llama a este y daría un bucle).
+# Códigos: 2 uso/árbol sucio/entorno, 3 tope alcanzado; en otro caso, el rc de Greptile (o el guardado en caché).
+set -uo pipefail
+
+uso() {
+  echo "uso: factory-greptile -b <base> [argumentos de «greptile review»…]   (dentro de un worktree git, con todo commiteado)" >&2
+}
+
+# ---------- argumentos: -b <base> obligatorio ----------
+base=""
+args=("$@")
+for ((i = 0; i < ${#args[@]}; i++)); do
+  if [[ "${args[$i]}" == "-b" ]]; then
+    base="${args[$((i + 1))]:-}"
+    break
+  fi
+done
+if [[ -z "$base" ]]; then
+  echo "factory-greptile: falta «-b <base>»" >&2
+  uso
+  exit 2
+fi
+
+# ---------- repo, rama, HEAD, merge-base ----------
+top="$(git rev-parse --show-toplevel 2>/dev/null)" || { echo "factory-greptile: no estás dentro de un repo git" >&2; exit 2; }
+cd "$top" || exit 2
+sha="$(git rev-parse HEAD 2>/dev/null)" || { echo "factory-greptile: el repo no tiene commits" >&2; exit 2; }
+rama="$(git branch --show-current 2>/dev/null)"
+mb="$(git merge-base HEAD "$base" 2>/dev/null)" || mb=""
+
+# repo = owner/repo desde el remoto origin (ssh o https); sin remoto, local/<basename del toplevel>
+url="$(git remote get-url origin 2>/dev/null)" || url=""
+repo=""
+if [[ -n "$url" ]]; then
+  u="${url%/}"
+  u="${u%.git}"
+  r="${u##*/}"
+  resto="${u%/*}"
+  o="${resto##*[/:]}"
+  cand="$o/$r"
+  [[ "$u" == */* && "$cand" =~ ^[^/:@[:space:]]+/[^/[:space:]]+$ ]] && repo="$cand"
+fi
+[[ -n "$repo" ]] || repo="local/$(basename "$top")"
+
+# ---------- registro (JSON con escape correcto, una sola escritura en modo append) ----------
+LOG="${FABRIK_GREPTILE_LOG:-$HOME/.hermes/factory/logs/greptile.jsonl}"
+registrar() { # <evento> <rc>
+  mkdir -p "$(dirname "$LOG")" || return 0
+  python3 -I -c '
+import json, os, sys, time
+log, repo, rama, sha, base, evento, rc = sys.argv[1:]
+linea = json.dumps({"t": int(time.time()), "repo": repo, "rama": rama, "sha": sha,
+                    "base": base, "evento": evento, "rc": int(rc)}, ensure_ascii=False) + "\n"
+fd = os.open(log, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+os.write(fd, linea.encode())
+os.close(fd)
+' "$LOG" "$repo" "$rama" "$sha" "$mb" "$1" "$2"
+}
+
+ejecuciones() { # nº de «ejecutado» ya registrados para este repo y rama
+  [[ -f "$LOG" ]] || { echo 0; return; }
+  python3 -I -c '
+import json, sys
+log, repo, rama = sys.argv[1:]
+n = 0
+for linea in open(log, encoding="utf-8", errors="replace"):
+    try:
+        d = json.loads(linea)
+    except ValueError:
+        continue
+    if isinstance(d, dict) and d.get("evento") == "ejecutado" and d.get("repo") == repo and d.get("rama") == rama:
+        n += 1
+print(n)
+' "$LOG" "$repo" "$rama"
+}
+
+# ---------- árbol sucio: greptile solo revisa commits ----------
+if [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then
+  echo "factory-greptile: commitea antes: greptile solo revisa commits" >&2
+  registrar sucio 2
+  exit 2
+fi
+if [[ -z "$mb" ]]; then
+  echo "factory-greptile: no encuentro el merge-base de HEAD con «$base»" >&2
+  exit 2
+fi
+
+# ---------- tope ----------
+tope="${FX_GREPTILE_TOPE:-1}"
+[[ "$tope" =~ ^[0-9]+$ ]] || tope=1
+tope=$((10#$tope))
+
+# ---------- caché por rama; un candado evita que dos llamadas simultáneas paguen las dos ----------
+san() { printf '%s' "$1" | sed -e 's#/#__#g' -e 's/[^A-Za-z0-9._-]/_/g'; }
+cache_dir="${FABRIK_GREPTILE_CACHE:-$HOME/.hermes/factory/cache/greptile}/$(san "$repo")/$(san "${rama:-_sin-rama}")"
+mkdir -p "$cache_dir" || { echo "factory-greptile: no puedo crear la caché $cache_dir" >&2; exit 2; }
+if command -v flock >/dev/null 2>&1; then
+  exec 9>"$cache_dir/.lock" && flock 9
+fi
+
+clave="$sha-$mb"
+if [[ -f "$cache_dir/$clave.out" && -f "$cache_dir/$clave.rc" ]]; then
+  rc_guardado="$(cat "$cache_dir/$clave.rc")"
+  if [[ "$rc_guardado" =~ ^[0-9]+$ ]]; then
+    echo "factory-greptile: resultado en caché (${sha:0:7}), sin ejecutar"
+    cat "$cache_dir/$clave.out"
+    registrar cache "$rc_guardado"
+    exit "$rc_guardado"
+  fi
+fi
+
+# ---------- PR abierto: con PR, las rondas las revisa el Greptile de GitHub; el CLI local no se usa ----------
+if [[ -n "$rama" ]]; then
+  GH="${FABRIK_GH:-gh}"
+  if pr="$("$GH" pr list --head "$rama" --state open --json number -q '.[0].number' 2>/dev/null)"; then
+    if [[ "$pr" =~ ^[0-9]+$ ]]; then
+      echo "factory-greptile: la rama $rama ya tiene PR abierto: con PR abierto no se usa el CLI local (~1 \$ por ejecución); Greptile de GitHub revisa cada push: lee sus comentarios con /check-pr y arréglalos todos en un único push por ronda" >&2
+      registrar pr_abierto 3
+      exit 3
+    fi
+  else
+    echo "factory-greptile: aviso: no pude consultar los PR abiertos de $rama con «$GH»; sigo (el tope acota el gasto)" >&2
+  fi
+fi
+
+hechas="$(ejecuciones)"
+if ((hechas >= tope)); then
+  echo "factory-greptile: tope de Greptile local alcanzado ($tope) en ${rama:-HEAD suelto}: las rondas del PR las revisa el Greptile de GitHub en cada push; si de verdad hace falta otra, bloquea la tarjeta y pide permiso al humano (FX_GREPTILE_TOPE)" >&2
+  registrar tope 3
+  exit 3
+fi
+
+# ---------- ejecutar ----------
+BIN="${FABRIK_GREPTILE_BIN:-}"
+if [[ -z "$BIN" ]]; then
+  selfdir="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd -P)"
+  IFS=: read -r -a dirs <<<"$PATH"
+  for d in "${dirs[@]}"; do
+    [[ -n "$d" && -f "$d/greptile" && -x "$d/greptile" ]] || continue
+    dreal="$(cd "$d" 2>/dev/null && pwd -P)" || continue
+    [[ "$dreal" == "$selfdir" ]] && continue   # cualquier greptile de este directorio es el envoltorio
+    destino="$(readlink -f "$d/greptile")"
+    [[ "$destino" == "$selfdir/greptile" || "$destino" == "$selfdir/factory-greptile" ]] && continue   # un enlace a uno de los dos desde otro directorio
+    BIN="$d/greptile"
+    break
+  done
+fi
+if [[ -z "$BIN" ]]; then
+  echo "factory-greptile: no encuentro el binario «greptile» (define FABRIK_GREPTILE_BIN)" >&2
+  exit 2
+fi
+
+salida="$(mktemp "$cache_dir/.salida.XXXXXX")" || exit 2
+trap 'rm -f "$salida"' EXIT
+"$BIN" review "$@" 2>&1 | tee "$salida"
+rc="${PIPESTATUS[0]}"
+if ((rc == 0)); then
+  # primero la salida y después el rc: la caché solo vale con los dos ficheros, y una interrupción entre ambos no deja un rc suelto que sirva vacío
+  mv "$salida" "$cache_dir/$clave.out"
+  echo 0 >"$cache_dir/$clave.rc"
+fi
+registrar ejecutado "$rc"
+exit "$rc"

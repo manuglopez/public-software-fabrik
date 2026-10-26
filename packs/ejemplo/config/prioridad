@@ -1,0 +1,5 @@
+# Prioridad en el turno de tests (factory-test). Cópialo a $FABRIK_DATA/locks/prioridad (def. ~/.hermes/factory).
+# Un patrón por línea: subcadena (o glob de bash) del `git rev-parse --show-toplevel` del que lanza los tests.
+# Quien casa va delante de los que esperan sin prioridad; no interrumpe la suite que ya está corriendo.
+# Forzarla en una llamada: FX_TEST_PRIO=1 factory-test -- <comando>   (FX_TEST_PRIO=0 la quita).
+software-fabrik

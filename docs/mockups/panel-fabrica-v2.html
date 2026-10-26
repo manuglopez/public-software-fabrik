@@ -1,0 +1,110 @@
+<style>
+  .fx{display:inline-block;min-width:780px;max-width:1000px;font-size:13px;color:var(--foreground)}
+  .fx h2{font-size:15px;margin:0 0 4px}
+  .fx .sub{color:var(--muted-foreground);font-size:12px;margin-bottom:12px}
+  .fx .tag{font-size:11px;padding:1px 7px;border-radius:9px;border:1px solid var(--border);color:var(--muted-foreground);white-space:nowrap}
+  .fx .acc{border-color:var(--accent);color:var(--accent)}
+  .fx .new{font-size:10px;padding:0 6px;border-radius:8px;border:1px dashed var(--accent);color:var(--accent);margin-left:6px;text-transform:none;letter-spacing:0}
+  .fx .grid{display:grid;grid-template-columns:1.25fr 1fr;gap:12px}
+  .fx .card{border:1px solid var(--border);border-radius:10px;padding:10px 12px;background:var(--card);margin-top:12px}
+  .fx .col>.card:first-child{margin-top:0}
+  .fx .card h3{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted-foreground);margin:0 0 8px;display:flex;justify-content:space-between;align-items:center}
+  .fx .row{display:flex;align-items:center;gap:8px;padding:6px 0;border-top:1px solid var(--border)}
+  .fx .row:first-of-type{border-top:none}
+  .fx .grow{flex:1;min-width:0}
+  .fx .muted{color:var(--muted-foreground);font-size:12px}
+  .fx .btn{font:inherit;font-size:12px;padding:3px 9px;border-radius:7px;border:1px solid var(--border);background:transparent;color:var(--foreground);cursor:pointer;white-space:nowrap}
+  .fx .btn.pri{border-color:var(--accent);color:var(--accent)}
+  .fx .dot{width:8px;height:8px;border-radius:50%;background:var(--accent);flex:none}
+  .fx .dot.off{background:var(--border)}
+  .fx .prod{font-weight:600;margin-top:4px}
+  .fx .bar{height:6px;border-radius:3px;background:var(--border);overflow:hidden;flex:1}
+  .fx .bar i{display:block;height:100%;background:var(--accent)}
+  .fx .bar i.full{opacity:.45}
+  .fx .tabs{display:flex;gap:14px;margin:0 0 12px;border-bottom:1px solid var(--border)}
+  .fx .tabs span{padding:4px 0;color:var(--muted-foreground)}
+  .fx .tabs span.on{color:var(--foreground);border-bottom:2px solid var(--accent)}
+  .fx .chain{display:flex;align-items:center;flex-wrap:wrap;gap:4px;padding:4px 0}
+  .fx .node{font-size:11px;padding:3px 8px;border-radius:7px;border:1px solid var(--border);color:var(--muted-foreground)}
+  .fx .node.done{border-color:var(--border);color:var(--foreground);opacity:.6}
+  .fx .node.run{border-color:var(--accent);color:var(--accent);font-weight:600}
+  .fx .arr{color:var(--muted-foreground);font-size:11px}
+  .fx .why{font-size:11px;padding:1px 6px;border-radius:6px;border:1px solid var(--accent);color:var(--accent);white-space:nowrap}
+  .fx .num{font-variant-numeric:tabular-nums}
+</style>
+<div class="fx">
+  <h2 style="display:flex;align-items:center;gap:8px"><svg class="logo" viewBox="0 0 32 32" width="26" height="26" aria-label="The Factory"><path d="M3 28V14l7 4v-4l7 4v-4l7 4V5h5v23z" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round"/><path d="M11 21.5l-2.5 2.5 2.5 2.5M19 21.5l2.5 2.5-2.5 2.5M16.6 20.5l-2.2 7" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg><span>The Factory</span> <span class="tag acc">MAQUETA v2 — datos de ejemplo de la noche del 24/10</span></h2>
+  <div class="sub">Página propia en la barra lateral de Hermes Desktop · ⌘K → «The Factory» · lo marcado <span class="new">nuevo</span> no estaba en la v1</div>
+  <div class="tabs"><span class="on">Inicio</span><span>Proyectos</span><span>Agentes</span><span>Cupos y costes</span><span>Memoria <span class="new">nuevo</span></span></div>
+
+  <div class="grid">
+    <div class="col">
+      <div class="card">
+        <h3>Te toca a ti <span class="tag acc">2</span></h3>
+        <div class="row"><span class="dot"></span><div class="grow"><b>Aprobar plan</b> · software-fabrik · «Pool de modelos»<div class="muted">5 tarjetas · modelo por tarjeta: Kimi ×3, Sonnet ×1, Opus ×1</div></div><button class="btn">Ver</button><button class="btn pri">Aprobar</button></div>
+        <div class="row"><span class="dot"></span><div class="grow"><b>Merge</b> · 6 PRs apilados de software-fabrik<div class="muted">⚠ apilados: se mergearán como un PR consolidado contra main</div></div><button class="btn pri">Mergear en orden</button></div>
+      </div>
+
+      <div class="card">
+        <h3>Atascadas <span class="new">nuevo</span><span class="tag acc">3</span></h3>
+        <div class="row"><div class="grow"><b>CIERRE-Q</b> · ops<div class="muted">en revisión desde hace 22 min, el revisor no arranca</div></div><span class="why">error viejo de cupo</span><button class="btn pri">Desatascar</button></div>
+        <div class="row"><div class="grow"><b>IMPL-4</b> · app-movil<div class="muted">reintentando cada 6 min · Kimi 100 % hasta 06:27, reserva agotada</div></div><span class="why">sin cupo</span><button class="btn pri">Pasar a Sonnet</button></div>
+        <div class="row"><div class="grow"><b>BASE-4</b> · ops<div class="muted">espera a que PR-1…PR-P estén en main</div></div><span class="why">esperando merge</span><button class="btn">Ver PRs</button></div>
+      </div>
+
+      <div class="card">
+        <h3>Cadena · ops / pack-fuera <span class="new">nuevo</span><span class="tag">4 de 11</span></h3>
+        <div class="chain">
+          <span class="node done">BASE-4</span><span class="arr">→</span>
+          <span class="node done">IMPL-7</span><span class="node done">IMPL-8</span><span class="node done">IMPL-9</span><span class="arr">→</span>
+          <span class="node run">IMPL-10 · 14 min</span><span class="arr">→</span>
+          <span class="node">CIERRE-4</span><span class="arr">→</span><span class="node">SEG-4</span><span class="arr">→</span><span class="node">PR-4</span><span class="arr">→</span>
+          <span class="node">PUB-PREP</span><span class="arr">→</span><span class="node">PUB-SEG</span><span class="arr">→</span><span class="node">ALTA-COMPA</span>
+        </div>
+        <div class="muted">Fila india: cada paso revisa el anterior · estimado ≈ 2–3 h al ritmo de hoy · clic en un nodo = abre la tarjeta</div>
+      </div>
+
+      <div class="card">
+        <h3>Lanzar trabajo</h3>
+        <div class="row"><div class="grow"><b>Nueva feature</b><div class="muted">Spec conmigo (Opus) → plan con modelo por tarjeta → tú apruebas</div></div><button class="btn pri" data-hermes-send="/fabrica feature">Empezar</button></div>
+        <div class="row"><div class="grow"><b>Bug</b><div class="muted">Síntoma o issue → test que lo reproduce → fix → PR</div></div><button class="btn" data-hermes-send="/fabrica bug">Empezar</button></div>
+        <div class="row"><div class="grow"><b>Incorporar repo</b> · <b>Diagnosticar repo dormido</b></div><button class="btn" data-hermes-send="/fabrica incorporar">Incorporar</button><button class="btn" data-hermes-send="/fabrica diagnostico">Diagnosticar</button></div>
+      </div>
+    </div>
+
+    <div class="col">
+      <div class="card">
+        <h3>En marcha <span class="tag">5 / 8</span></h3>
+        <div class="prod">ops</div>
+        <div class="row"><span class="tag">programador · Sonnet</span><div class="grow">IMPL-10 extraer packs/acme<div class="muted">59 llamadas al modelo · 71 herramientas</div></div><span class="muted">14 min</span></div>
+        <div class="row"><span class="tag">revisor · Opus</span><div class="grow">CIERRE-R revisión</div><span class="muted">3 min</span></div>
+        <div class="row"><span class="tag">docs · Gemini high</span><div class="grow">IMPL-P2 docs del pool</div><span class="muted">6 min</span></div>
+        <div class="prod">tienda <span class="tag">⏸ pausa nocturna</span></div>
+        <div class="row"><span class="muted grow">3 tarjetas aparcadas hasta las 08:00</span><button class="btn">Reanudar</button></div>
+      </div>
+
+      <div class="card">
+        <h3>Cupos <span class="new">nuevo</span><span class="muted">foto 05:20</span></h3>
+        <div class="row"><span class="muted" style="width:120px">Claude semana</span><div class="bar"><i style="width:84%"></i></div><span class="muted num">84 % · renueva sáb 18:00</span></div>
+        <div class="row"><span class="muted" style="width:120px">Claude 5 h</span><div class="bar"><i style="width:9%"></i></div><span class="muted num">9 % · 05:00</span></div>
+        <div class="row"><span class="muted" style="width:120px">Kimi 5 h</span><div class="bar"><i class="full" style="width:100%"></i></div><span class="muted num">100 % · 06:27</span></div>
+        <div class="row"><span class="muted" style="width:120px">Kimi 7 días</span><div class="bar"><i style="width:85%"></i></div><span class="muted num">85 % · lun 00:27</span></div>
+        <div class="row"><span class="muted" style="width:120px">Gemini semana</span><div class="bar"><i style="width:0%"></i></div><span class="muted num">0 % · 31/10</span></div>
+        <div class="row"><span class="muted" style="width:120px">Antigravity-Claude</span><div class="bar"><i class="full" style="width:100%"></i></div><span class="muted num">100 % · 29/10</span></div>
+      </div>
+
+      <div class="card">
+        <h3>Máquina</h3>
+        <div class="row"><span class="muted" style="width:70px">RAM</span><div class="bar"><i style="width:64%"></i></div><span class="muted">20 / 31 GB</span></div>
+        <div class="row"><span class="muted" style="width:70px">CPU</span><div class="bar"><i style="width:38%"></i></div><span class="muted">6 / 16</span></div>
+        <div class="row"><span class="muted" style="width:70px">Suite</span><div class="grow">🔒 programador · software-fabrik/pack-fuera</div><span class="muted">cola: 1</span></div>
+      </div>
+
+      <div class="card">
+        <h3>Memoria <span class="new">nuevo</span></h3>
+        <div class="row"><div class="grow">fabrica · <b class="num">451</b> documentos · <b class="num">14.595</b> nodos</div><span class="muted">última entrada hace 4 min</span></div>
+        <div class="row"><div class="grow muted">Hoy: 12 tarjetas · 5 lecciones · 3 PRs · 0 notas de Claude Code</div><button class="btn">Buscar</button><button class="btn pri">Abrir grafo</button></div>
+      </div>
+    </div>
+  </div>
+</div>

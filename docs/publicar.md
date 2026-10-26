@@ -52,6 +52,17 @@ el destino concreto de cada organización va en su pack (por ejemplo `docs/publi
    (`git -C "$DEST" ls-files | head -50`): `LICENSE`, `README.md`, `bin/`, `docs/`, `packs/ejemplo/`… y nada más
    en `packs/`.
 
+   **Mete la mitad de escritorio construida.** `plugin/fabrica/desktop/plugin.js` es un artefacto que el repo
+   privado no versiona, pero el catálogo de plugins de Hermes instala el plugin clonando el público en un commit
+   exacto, sin construir nada: el bundle tiene que ir dentro. Se construye, se comprueba y se añade al único commit:
+
+   ```bash
+   scripts/plugin-desktop.sh check
+   cp plugin/fabrica/desktop/plugin.js "$DEST/plugin/fabrica/desktop/plugin.js"
+   git -C "$DEST" add -f plugin/fabrica/desktop/plugin.js
+   git -C "$DEST" commit -q --amend --no-edit
+   ```
+
 4. **Comprueba el árbol publicado, no solo el privado.** El guardián imprime cuántos términos de denylists
    externas ha reunido (con tu pack instalado, N > 0); sin ninguna avisa pero no falla y sigue exigiendo cero
    coincidencias de rutas, IPs y hosts:
@@ -88,9 +99,16 @@ el destino concreto de cada organización va en su pack (por ejemplo `docs/publi
 - [ ] `gitleaks` o `trufflehog` sin hallazgos.
 - [ ] Revisión humana de `git -C "$DEST" ls-files`.
 
+## Catálogo de plugins de Hermes
+
+El panel (`plugin/fabrica`) se lista en el catálogo de la comunidad desde el repo **público**: el catálogo exige un
+repo que cualquiera pueda clonar y un SHA exacto, así que cada versión del catálogo apunta a un commit del público.
+Pasos y plantilla de la entrada: [`docs/catalogo.md`](catalogo.md).
+
 ## Sincronizar después
 
 Publicar una vez no actualiza el público: cada versión nueva repite el procedimiento sobre un `DEST` limpio.
 Para conservar historia en el público a partir de la segunda versión, clona el público, copia encima el nuevo árbol
-exportado (pasos 1–3) y haz un commit normal; la regla de oro sigue igual: jamás empujes la historia del repo
+exportado (pasos 1–3, con el `plugin.js` construido: `git add -f` porque el `.gitignore` lo ignora) y haz un
+commit normal; la regla de oro sigue igual: jamás empujes la historia del repo
 privado.

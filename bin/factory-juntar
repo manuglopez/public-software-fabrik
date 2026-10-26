@@ -40,5 +40,5 @@ for s in "${SUBS[@]}"; do
 done
 echo "✓ Todas juntadas en agente/$FEAT. Siguiente: verificación completa (factory-test) en la feature."
 if [[ $LIMPIAR -eq 1 ]]; then
-  for s in "${SUBS[@]}"; do "$(dirname "$0")/factory-prep" --limpiar "$REPO" "$s" && echo "· limpiada $s"; done
+  for s in "${SUBS[@]}"; do "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/factory-prep" --limpiar "$REPO" "$s" && echo "· limpiada $s"; done
 fi

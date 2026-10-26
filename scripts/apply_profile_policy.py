@@ -8,6 +8,7 @@ Los modelos se pueden cambiar aquí o luego desde el panel / `hermes -p <rol> co
 Crea el perfil si no existe (`hermes profile create <rol> --clone --no-alias`).
 """
 import json
+import os
 import re
 import subprocess
 import sys
@@ -84,6 +85,21 @@ DENY = [
       for cmd in ("php artisan test", "vendor/bin/phpunit", "./vendor/bin/phpunit", "php vendor/bin/phpunit",
                   "vendor/bin/paratest", "php vendor/bin/paratest", "composer test", "npm test", "npm run test")],
 ]
+
+
+def fabrik_home_persistente():
+    """Raíz de la fábrica para las rutas que se PERSISTEN en la config de los perfiles (REPO solo sirve para leer:
+    si el script corre desde un worktree, escribir su ruta deja a los perfiles sin entorno al borrarlo).
+    Sale de $FABRIK_HOME o, si no está, de ~/Code/software-fabrik; un worktree (`/.factory-worktrees/`) no vale."""
+    base = os.environ.get("FABRIK_HOME") or str(Path.home() / "Code/software-fabrik")
+    ruta = Path(base).expanduser()
+    if "/.factory-worktrees/" in f"{ruta.resolve()}/" or "/.factory-worktrees/" in f"{ruta}/":
+        raise ValueError(
+            f"la ruta de la fábrica a persistir en los perfiles ({ruta}) es un worktree (.factory-worktrees): "
+            "se borraría con él y los perfiles perderían su entorno. Define FABRIK_HOME con el checkout estable "
+            "(por defecto ~/Code/software-fabrik) y repite; no se ha escrito nada."
+        )
+    return ruta
 
 
 def sh(*a):
@@ -193,6 +209,13 @@ def main():
             print(f"{rol:<12} {prov}/{model}{cadena_reserva} · compacta {ctok//1000}k")
         return
     home = Path.home() / ".hermes/profiles"
+    fabrik_home = None
+    if not solo_soul:
+        try:
+            fabrik_home = fabrik_home_persistente()
+        except ValueError as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            sys.exit(2)
     for rol in roles:
         (prov, model), reservas, ctok = ROLES[rol]
         pdir = home / rol
@@ -211,7 +234,7 @@ def main():
         cset(rol, "approvals.deny", DENY)
         cset(rol, "compression.threshold", "0.5"); cset(rol, "compression.threshold_tokens", str(ctok))
         cset(rol, "compression.proactive_prune_tokens", "80000"); cset(rol, "compression.micro_compact", "true")
-        cset(rol, "terminal.shell_init_files", [str(REPO / "config/agent-shell.sh")])
+        cset(rol, "terminal.shell_init_files", [str(fabrik_home / "config/agent-shell.sh")])
         cset(rol, "terminal.timeout", "600")
         # pasos por tarjeta: 150 se quedaba corto en IMPL con TDD real (dos tarjetas reales se rindieron en 150/150)
         cset(rol, "agent.max_turns", {"programador": "250", "tester": "200"}.get(rol, "150"))

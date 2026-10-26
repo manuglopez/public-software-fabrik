@@ -1,0 +1,492 @@
+#!/usr/bin/env python3
+"""fabrik-modelos — reparto dinámico de modelos y cuentas por cupo y calidad, con experimento.
+
+  fabrik-modelos tick              (cada 10 min, tras fabrik-cupos) modelo por defecto y reservas de cada perfil,
+                                   y cuenta de Claude de cada perfil según el cupo que queda
+  fabrik-modelos asignar <board>   (lo llama fabrik-triage) fija modelo a las tarjetas `ready` sin modelo
+  fabrik-modelos informe [días] [--json]  calidad por modelo: aprobadas a la primera, rondas de cambios, fallos
+  fabrik-modelos estado [--json]   qué ruta está disponible ahora y por qué (--json: además el reparto, cuentas, brazos)
+  fabrik-modelos comprobar [--json]  ¿el canal de avisos aguanta que se agote la bolsa Claude? (exit 1 si hay ⛔)
+
+Experimento: para cada rol hay varias rutas candidatas («brazos»). Entre las que tienen cupo se elige la que
+menos tarjetas lleva de ese rol → muestras equilibradas. Tras unos días, `informe` dice cuál itera menos y
+se deja en ROLES solo lo que gana. Regla de calidad: quien revisa nunca usa el mismo modelo que quien
+implementó, y prefiere otra familia si hay alguna disponible.
+
+Reparto (plan The Factory D-5): RUTAS, ROLES, ULTIMO_RECURSO, TOPE y TOPE_CUENTA salen de `modelos.reparto` de la
+config fusionada (scripts/fabrik_config.py) y ROLES_CODIGO de `modelos.reglas.roles_codigo`; lo que falta (o está mal,
+con aviso en stderr) toma el valor por defecto de fabrik_config.py. TOPE_CUENTA está vacío en el motor: los topes por cuenta son
+personales.
+"""
+import glob, json, os, re, sqlite3, subprocess, sys, time
+from datetime import datetime, timezone
+
+H = os.path.expanduser("~")
+FABRIK = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+sys.path.insert(0, os.path.join(FABRIK, "scripts"))
+import canal_avisos  # noqa: E402
+CUPOS = f"{H}/.hermes/factory/logs/cupos.jsonl"
+LOG = f"{H}/.hermes/factory/logs/modelos.jsonl"
+sys.path.insert(0, os.path.join(FABRIK, "scripts"))
+import fabrik_config as _defectos  # noqa: E402  (defaults del reparto: se importa sin PyYAML)
+
+CLAUDE = _defectos.PROVEEDOR_CLAUDE   # plugin de Hermes del proveedor Claude (cuenta de Claude por perfil)
+_REP = _defectos.REPARTO_DEFECTO
+
+# ruta → (proveedor, modelo, familia, cuenta de Claude o None, bolsas que consumen); los valores, en fabrik_config.py
+RUTAS = {n: (r["proveedor"], r["modelo"], r["familia"], "*" if r["cuenta_claude"] else None, list(r["bolsas"]))
+         for n, r in _REP["rutas"].items()}
+# Fable NO entra en el reparto automático: gasta muy deprisa. Solo si el humano lo fija en una tarjeta
+# (`hermes kanban set-model <id> <modelo> --provider <proveedor>`): las tarjetas con modelo ya fijado no se tocan.
+# rol → brazos del experimento (orden = preferencia cuando hay empate) y reserva final siempre disponible
+ROLES = {rol: list(c) for rol, c in _REP["roles"].items()}
+ULTIMO_RECURSO = _REP["ultimo_recurso"]
+# Regla del usuario (plan The Factory D-6): nada de *flash* en código → sin cupo, la tarjeta se aparca (triage_cupos).
+ROLES_CODIGO = {"programador", "tester"}
+EXPERIMENTO = {"programador", "tester"}   # solo aquí se reparten brazos para comparar calidad
+REVISORES = {"tester", "revisor", "seguridad"}
+# Topes por bolsa (% usado a partir del cual no se asigna trabajo nuevo) y, por cuenta de Claude, el semanal
+# (personal: `modelos.reparto.topes_cuenta` en ~/.config/fabrica/fabrik.yaml).
+TOPE = dict(_REP["topes"])
+TOPE_CUENTA = {}
+VENTANA_H = {"5h": 5, "sem": 168, "7d": 168, "30d": 720}
+try:   # edad máxima (s) de la foto de cupos con la que decide `tick`; más vieja → se refresca antes
+    FOTO_MAX_EDAD = int(os.environ.get("FABRIK_FOTO_MAX_EDAD") or 180)
+except ValueError:
+    FOTO_MAX_EDAD = 180
+CAMPOS_RUTA = ("proveedor", "modelo", "familia", "cuenta_claude", "bolsas")
+# % de una bolsa a partir del cual `tick` avisa por Telegram (`modelos.reparto.aviso_bolsa`) y dónde apunta lo avisado
+AVISO_BOLSA = 98
+AVISOS = f"{H}/.hermes/factory/logs/modelos-avisos.json"
+
+
+def aviso(texto):
+    print(f"aviso: {texto}", file=sys.stderr)
+
+
+def config_modelos():
+    """`modelos` de la config fusionada. fabrik_config.py necesita PyYAML: si este python no lo tiene, se pide a uv.
+    {} si no se puede leer (con aviso): entonces rigen los valores de este script."""
+    script = os.path.join(FABRIK, "scripts", "fabrik_config.py")
+    try:
+        import yaml  # noqa: F401
+    except ImportError:
+        try:
+            r = subprocess.run(["uv", "run", "--quiet", "--with", "pyyaml", "python", script, "get", "modelos"],
+                               capture_output=True, text=True, timeout=120)
+            if r.returncode == 0:
+                return json.loads(r.stdout)
+            motivo = r.stderr.strip()[-300:]
+        except (OSError, subprocess.SubprocessError, ValueError) as e:
+            motivo = str(e)
+    else:
+        try:
+            sys.path.insert(0, os.path.dirname(script))
+            import fabrik_config
+            return fabrik_config.cargar().get("modelos") or {}
+        except Exception as e:  # noqa: BLE001 - YAML roto o lo que sea: no se para el reparto
+            motivo = str(e)
+    aviso(f"no se pudo leer la config ({motivo}); rige el reparto por defecto")
+    return {}
+
+
+def _ruta_dict(t):
+    return dict(zip(CAMPOS_RUTA, (t[0], t[1], t[2], bool(t[3]), list(t[4])), strict=True))
+
+
+def _tope_ok(v):
+    return isinstance(v, int) and not isinstance(v, bool) and 1 <= v <= 100
+
+
+def aplicar_reparto(modelos):
+    """Sustituye las tablas de arriba por `modelos.reparto`/`modelos.reglas`; lo que falte o esté mal no se toca."""
+    global ROLES, ULTIMO_RECURSO, ROLES_CODIGO, AVISO_BOLSA
+    rep = modelos.get("reparto") if isinstance(modelos, dict) and isinstance(modelos.get("reparto"), dict) else {}
+    reglas = modelos.get("reglas") if isinstance(modelos, dict) and isinstance(modelos.get("reglas"), dict) else {}
+    for nombre, r in (rep.get("rutas") if isinstance(rep.get("rutas"), dict) else {}).items():
+        d = {**(_ruta_dict(RUTAS[nombre]) if nombre in RUTAS else {}), **(r if isinstance(r, dict) else {})}
+        if not all(isinstance(d.get(c), str) and d[c] for c in ("proveedor", "modelo")) or \
+                not isinstance(d.get("bolsas", []), list):
+            aviso(f"ruta «{nombre}» incompleta (proveedor, modelo, bolsas): se ignora")
+            continue
+        RUTAS[nombre] = (d["proveedor"], d["modelo"], str(d.get("familia") or d["proveedor"]),
+                         "*" if d.get("cuenta_claude") else None, [str(b) for b in d.get("bolsas") or []])
+    roles = dict(ROLES)
+    for rol, cands in (rep.get("roles") if isinstance(rep.get("roles"), dict) else {}).items():
+        cands = cands if isinstance(cands, list) else []
+        validos = [c for c in cands if isinstance(c, str) and c in RUTAS]
+        if validos != cands:
+            aviso(f"rol «{rol}»: rutas desconocidas {sorted(set(map(str, cands)) - set(validos))}"
+                  + ("" if validos else ": se queda con su reparto por defecto"))
+        if validos:
+            roles[rol] = validos
+    ROLES = roles
+    ur = rep.get("ultimo_recurso", ULTIMO_RECURSO)
+    if isinstance(ur, str) and ur in RUTAS:
+        ULTIMO_RECURSO = ur
+    else:
+        aviso(f"ultimo_recurso «{ur}» no es una ruta: se queda {ULTIMO_RECURSO}")
+    for clave, tabla in (("topes", TOPE), ("topes_cuenta", TOPE_CUENTA)):
+        for k, v in (rep.get(clave) if isinstance(rep.get(clave), dict) else {}).items():
+            if _tope_ok(v):
+                tabla[str(k)] = v
+            else:
+                aviso(f"{clave}.{k} = {v!r}: tiene que ser un entero entre 1 y 100; se ignora")
+    if "aviso_bolsa" in rep:
+        if _tope_ok(rep["aviso_bolsa"]):
+            AVISO_BOLSA = rep["aviso_bolsa"]
+        else:
+            aviso(f"aviso_bolsa = {rep['aviso_bolsa']!r}: tiene que ser un entero entre 1 y 100; "
+                  f"se queda {AVISO_BOLSA}")
+    rc = reglas.get("roles_codigo")
+    if isinstance(rc, list) and all(isinstance(x, str) for x in rc):
+        ROLES_CODIGO = set(rc)
+
+
+def cuentas():
+    return {os.path.basename(d)[7:]: d for d in sorted(glob.glob(f"{H}/.config/fabrica/claude-*")) if os.path.isdir(d)}
+
+
+def ultima_foto():
+    """Última línea de cupos.jsonl completa (`t`, `bolsas`, `errores`…); {} si no hay foto legible."""
+    try:
+        with open(CUPOS) as f:
+            d = json.loads(f.readlines()[-1])
+        return d if isinstance(d, dict) else {}
+    except (OSError, IndexError, ValueError):
+        return {}
+
+
+def foto():
+    return ultima_foto().get("bolsas") or {}
+
+
+def foto_fresca():
+    """foto() tras refrescarla con `fabrik-cupos registrar` si tiene más de FOTO_MAX_EDAD s (o no hay foto, o no
+    trae `t`): justo después de una renovación una foto vieja deja la bolsa llena como agotada. Si el refresco
+    falla, avisa y sigue con la que haya."""
+    t = ultima_foto().get("t")
+    edad = time.time() - t if isinstance(t, (int, float)) and not isinstance(t, bool) else None
+    if edad is None or edad > FOTO_MAX_EDAD:
+        cmd = [os.environ.get("FABRIK_CUPOS") or f"{FABRIK}/bin/fabrik-cupos", "registrar"]
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            if r.returncode != 0:
+                aviso(f"fabrik-cupos registrar falló (rc={r.returncode}): {(r.stderr or r.stdout).strip()[-200:]}; "
+                      "se decide con la foto anterior")
+        except (OSError, subprocess.SubprocessError) as e:
+            aviso(f"no se pudo ejecutar fabrik-cupos registrar ({e}); se decide con la foto anterior")
+    return foto()
+
+
+def _horas_a(reset):
+    try:
+        r = datetime.fromisoformat(str(reset).replace("Z", "+00:00"))
+        return (r - datetime.now(timezone.utc)).total_seconds() / 3600
+    except ValueError:
+        return None
+
+
+def bolsa_ok(nombre, pct, reset, cuenta=None):
+    """True si la bolsa admite trabajo nuevo: bajo su tope y sin ir por delante de su ritmo
+    (salvo «úsalo o piérdelo»: menos de un día para renovarse)."""
+    tipo = nombre.split("_")[-1]
+    tope = min(TOPE.get(tipo, 95), TOPE_CUENTA.get(cuenta, 100) if tipo == "sem" else 100)
+    h, total = _horas_a(reset), VENTANA_H.get(tipo)
+    if h is not None and h <= 0:   # el corte ya pasó: la foto es anterior y la bolsa está recién llena
+        return True, "renovada (foto anterior al corte)"
+    if pct >= tope:
+        return False, f"{pct:.0f}% ≥ tope {tope}%"
+    if h is None or not total or tipo == "5h":
+        return True, f"{pct:.0f}%"
+    if h < 24:
+        return True, f"{pct:.0f}%, se renueva en {h:.0f} h (úsalo o piérdelo)"
+    ritmo = 100 * (1 - h / total) + 25          # % «permitido» a estas alturas de la ventana, con holgura
+    return (pct <= ritmo), f"{pct:.0f}% (ritmo ≤{ritmo:.0f}%)"
+
+
+def ruta_ok(ruta, bolsas, cuenta=None):
+    _, _, _, c, consume = RUTAS[ruta]
+    motivos = []
+    for b in consume:
+        clave = f"{b}@{cuenta}" if c else b
+        if clave not in bolsas:
+            if c:  # sin dato de esa cuenta → no arriesgar
+                return False, f"sin dato {clave}"
+            continue
+        ok, why = bolsa_ok(b, *bolsas[clave], cuenta=cuenta)
+        motivos.append(f"{clave} {why}")
+        if not ok:
+            return False, "; ".join(motivos)
+    return True, "; ".join(motivos) or "sin dato (se asume libre)"
+
+
+def margen_hora(bolsas, cuenta, bolsa="claude_sem"):
+    """(pct semanal, horas al reset, margen por hora) de una cuenta: cuánto puede gastar por hora hasta su tope
+    efectivo sin agotarse antes de renovar. Reset pasado = renovada (0 %). Sin dato de la bolsa: (None, None, None)."""
+    if f"{bolsa}@{cuenta}" not in bolsas:
+        return None, None, None
+    pct, reset = bolsas[f"{bolsa}@{cuenta}"]
+    h = _horas_a(reset)
+    if h is not None and h <= 0:
+        pct = 0
+    tope = min(TOPE.get("sem", 95), TOPE_CUENTA.get(cuenta, 100))
+    return pct, h, (tope - pct) / max(h if h is not None else 999, 0.5)
+
+
+def mejor_cuenta(ruta, bolsas):
+    """Cuenta de Claude apta con más margen por hora para esa ruta (None si ninguna). Empate (< 1 %): alfabético."""
+    b = next((x for x in RUTAS[ruta][4] if x.endswith("_sem")), "claude_sem")
+    aptas = [(margen_hora(bolsas, c, b)[2] or 0, c) for c in sorted(cuentas()) if ruta_ok(ruta, bolsas, c)[0]]
+    if not aptas:
+        return None
+    mejor = max(m for m, _ in aptas)
+    return next(c for m, c in aptas if mejor - m <= 0.01 * abs(mejor))
+
+
+def disponibles(rol, bolsas):
+    res = []
+    for r in ROLES[rol]:
+        if RUTAS[r][3]:
+            c = mejor_cuenta(r, bolsas)
+            if c:
+                res.append((r, c))
+        elif ruta_ok(r, bolsas)[0]:
+            res.append((r, None))
+    if res or rol in ROLES_CODIGO:
+        return res
+    return [(ULTIMO_RECURSO, None)]
+
+
+def log_asignaciones():
+    try:
+        return [json.loads(l) for l in open(LOG)]
+    except OSError:
+        return []
+
+
+def modelo_implementador(board, tid, hist):
+    """Modelo con el que se implementó lo que revisa esta tarjeta: la propia (el tester revisa la IMPL en su
+    misma tarjeta) o sus padres IMPL (revisor en CIERRE-LOCAL)."""
+    porid = {(h["board"], h["task"]): h for h in hist if h.get("rol") == "programador"}
+    if (board, tid) in porid:
+        return {porid[(board, tid)]["ruta"]}
+    c = sqlite3.connect(f"file:{H}/.hermes/kanban/boards/{board}/kanban.db?mode=ro", uri=True)
+    padres = [r[0] for r in c.execute("SELECT parent_id FROM task_links WHERE child_id=?", (tid,))]
+    return {porid[(board, p)]["ruta"] for p in padres if (board, p) in porid}
+
+
+def elegir(rol, bolsas, hist, evitar=()):
+    cands = disponibles(rol, bolsas)
+    fam_evitar = {RUTAS[r][2] for r in evitar if r in RUTAS}
+    sin_mismo = [x for x in cands if x[0] not in evitar] or cands
+    otra_fam = [x for x in sin_mismo if RUTAS[x[0]][2] not in fam_evitar]
+    pool = otra_fam or sin_mismo
+    orden = ROLES[rol] + [ULTIMO_RECURSO]
+    if rol not in EXPERIMENTO:   # roles de criterio (orquestar, revisar, seguridad): siempre el mejor disponible
+        return min(pool, key=lambda x: orden.index(x[0]) if x[0] in orden else 99)
+    # experimento: el brazo con menos tarjetas de este rol en los últimos 7 días (empate → orden de ROLES)
+    hace7 = time.time() - 7 * 86400
+    n = {r: sum(1 for h in hist if h.get("rol") == rol and h.get("ruta") == r and h["t"] > hace7) for r, _ in pool}
+    orden = ROLES[rol] + [ULTIMO_RECURSO]
+    return min(pool, key=lambda x: (n.get(x[0], 0), orden.index(x[0]) if x[0] in orden else 99))
+
+
+def hk(*a, timeout=60):
+    return subprocess.run(["hermes", *a], capture_output=True, text=True, timeout=timeout)
+
+
+def asignar(board):
+    bolsas, hist = foto(), log_asignaciones()
+    c = sqlite3.connect(f"file:{H}/.hermes/kanban/boards/{board}/kanban.db?mode=ro", uri=True)
+    filas = c.execute("SELECT id, assignee, title FROM tasks WHERE status='ready' AND coalesce(model_override,'')=''"
+                      " AND title NOT LIKE '%[manual]%'").fetchall()
+    for tid, rol, title in filas:
+        if rol not in ROLES:
+            continue
+        evitar = modelo_implementador(board, tid, hist) if rol in REVISORES else set()
+        if not disponibles(rol, bolsas):
+            continue   # sin cupo apto: la aparca triage_cupos hasta que se renueve
+        ruta, cuenta = elegir(rol, bolsas, hist, evitar)
+        prov, modelo = RUTAS[ruta][:2]
+        r = hk("kanban", "--board", board, "set-model", tid, modelo, "--provider", prov)
+        if r.returncode != 0:
+            continue
+        if cuenta:
+            fijar_cuenta(rol, cuenta)
+        reg = {"t": time.time(), "board": board, "task": tid, "rol": rol, "ruta": ruta, "modelo": modelo,
+               "proveedor": prov, "cuenta": cuenta, "evitar": sorted(evitar), "titulo": title[:80]}
+        with open(LOG, "a") as f:
+            f.write(json.dumps(reg, ensure_ascii=False) + "\n")
+        print(f"{board} {tid} {rol} → {ruta}{'@' + cuenta if cuenta else ''}")
+
+
+_cuenta_actual = {}
+
+
+def fijar_cuenta(rol, cuenta):
+    """Cuenta de Claude del perfil (el conector la lee en cada arranque de agente)."""
+    d = cuentas()[cuenta]
+    cfg = f"{H}/.hermes/profiles/{rol}/config.yaml"
+    if _cuenta_actual.get(rol) == d or (os.path.exists(cfg) and f"claude_config_dir: {d}" in open(cfg).read()):
+        _cuenta_actual[rol] = d
+        return
+    hk("-p", rol, "config", "set",
+       f"plugins.entries.{CLAUDE}.settings.claude_config_dir", d)
+    _cuenta_actual[rol] = d
+
+
+def tick():
+    """Por defecto de cada perfil = mejor ruta disponible ahora; reservas = el resto disponibles + último recurso."""
+    bolsas, hist = foto_fresca(), log_asignaciones()
+    cambios = {}   # rol → ruta de antes (la del model.default actual del perfil) y de después (None: sin cupo apto)
+    for rol in ROLES:
+        cands = disponibles(rol, bolsas)
+        actual = perfil(rol)["modelo"]
+        cambios[rol] = {"antes": next((r for r, t in RUTAS.items() if t[1] == actual), actual),
+                        "despues": cands[0][0] if cands else None}
+        if not cands:
+            print(f"{rol:12} → sin cupo apto (se mantiene la config)"); continue
+        ruta, cuenta = cands[0]
+        prov, modelo = RUTAS[ruta][:2]
+        cfg = open(f"{H}/.hermes/profiles/{rol}/config.yaml").read()
+        if not re.search(rf'^\s+default: "?{re.escape(modelo)}"?\s*$', cfg, re.M):
+            hk("-p", rol, "config", "set", "model.provider", prov)
+            hk("-p", rol, "config", "set", "model.default", modelo)
+        reservas = [{"provider": RUTAS[r][0], "model": RUTAS[r][1]} for r, c in cands[1:3]
+                    if not RUTAS[r][3] or c == cuenta]
+        if rol not in ROLES_CODIGO and ULTIMO_RECURSO != ruta and all(x["model"] != RUTAS[ULTIMO_RECURSO][1] for x in reservas):
+            reservas.append({"provider": RUTAS[ULTIMO_RECURSO][0], "model": RUTAS[ULTIMO_RECURSO][1]})
+        if json.dumps(reservas) != _reservas_actuales(cfg):
+            hk("-p", rol, "config", "set", "fallback_providers", json.dumps(reservas))
+        if cuenta:
+            fijar_cuenta(rol, cuenta)
+        print(f"{rol:12} → {ruta}{'@' + cuenta if cuenta else ''}  (disponibles: {', '.join(r + ('@' + c if c else '') for r, c in cands)})")
+    try:   # el canal de avisos (hermes send, sin modelo) nunca para el reparto
+        canal_avisos.avisar_bolsas(bolsas, AVISO_BOLSA, cambios, RUTAS, AVISOS, canal_avisos.enviar_hermes)
+        canal_avisos.avisar_comprobacion(H, AVISOS, canal_avisos.enviar_hermes)
+    except Exception as e:  # noqa: BLE001
+        aviso(f"canal de avisos: {e}")
+
+
+def _reservas_actuales(cfg):
+    m = re.search(r"^fallback_providers:\n((?:  - .*\n|    .*\n)*)", cfg, re.M)
+    if not m:
+        return ""
+    pares = re.findall(r"provider: (\S+)\n\s+model: (\S+)", m.group(1))
+    return json.dumps([{"provider": p, "model": mo} for p, mo in pares])
+
+
+def sospecha_ciega(foto_completa, cuentas_claude):
+    """Cuentas que `fabrik-cupos` sospecha que leyó a ciegas (errores.anthropic_sospecha, texto libre): las que
+    se nombran en él. [] si no hay sospecha."""
+    texto = (foto_completa.get("errores") or {}).get("anthropic_sospecha")
+    return [c for c in cuentas_claude if texto and re.search(rf"(?<![\w-]){re.escape(c)}(?![\w-])", str(texto))]
+
+
+def estado(como_json=False):
+    completa = ultima_foto()
+    bolsas = completa.get("bolsas") or {}
+    cu = {c: margen_hora(bolsas, c) for c in cuentas()}
+    sospechas = sospecha_ciega(completa, cu)
+    filas = []
+    for r in RUTAS:
+        for c in (cuentas() if RUTAS[r][3] else [None]):
+            ok, why = ruta_ok(r, bolsas, c)
+            filas.append({"ruta": r, "cuenta": c, "ok": ok, "motivo": why})
+    if not como_json:
+        for c, (pct, h, m) in cu.items():
+            if m is not None and h is not None:
+                coma = f"{m:.2f}".replace(".", ",")
+                print(f"cuenta {c}: semanal {pct:.0f} % · renueva en {max(h, 0):.0f} h · margen/hora {coma}")
+        if sospechas:
+            print(f"⚠ sospecha de lectura ciega: {' y '.join(sospechas)} devuelven cifras idénticas")
+        for f in filas:
+            donde = f["ruta"] + ("@" + f["cuenta"] if f["cuenta"] else "")
+            print(f"{donde:18} {'✅' if f['ok'] else '⛔'} {f['motivo']}")
+        return
+    hace7, brazos = time.time() - 7 * 86400, {}
+    for h in log_asignaciones():
+        if h.get("t", 0) > hace7 and h.get("rol") and h.get("ruta"):
+            brazos[(h["rol"], h["ruta"])] = brazos.get((h["rol"], h["ruta"]), 0) + 1
+    print(json.dumps({
+        "reparto": {"rutas": {n: _ruta_dict(t) for n, t in RUTAS.items()}, "roles": ROLES,
+                    "ultimo_recurso": ULTIMO_RECURSO, "topes": TOPE, "topes_cuenta": TOPE_CUENTA},
+        "roles_codigo": sorted(ROLES_CODIGO), "estado": filas,
+        "cuentas": [{"cuenta": c, "sem_pct": bolsas.get(f"claude_sem@{c}", [None, None])[0],
+                     "renueva": bolsas.get(f"claude_sem@{c}", [None, None])[1], "tope": TOPE_CUENTA.get(c),
+                     "horas_reset": None if h is None else round(h, 1), "margen_hora": None if m is None else round(m, 2)}
+                    for c, (_, h, m) in cu.items()],
+        "brazos_7d": [{"rol": r, "ruta": ru, "n": n} for (r, ru), n in sorted(brazos.items())],
+        "perfiles": [perfil(rol) for rol in ROLES],
+        **({"sospecha_lectura_ciega": sospechas} if sospechas else {}),
+    }, ensure_ascii=False))
+
+
+def perfil(rol):
+    """Modelo por defecto que tiene ahora el perfil (lo que dejó el último tick); None si no se puede leer."""
+    try:
+        cfg = open(f"{H}/.hermes/profiles/{rol}/config.yaml").read()
+    except OSError:
+        cfg = ""
+    def leer(campo):
+        m = re.search(rf'^\s+{campo}: "?([^"\s]+)"?\s*$', cfg, re.M)
+        return m[1] if m else None
+    return {"rol": rol, "proveedor": leer("provider"), "modelo": leer("default")}
+
+
+def informe(dias=14, como_json=False):
+    hist = [h for h in log_asignaciones() if h["t"] > time.time() - dias * 86400]
+    filas = {}
+    for h in hist:
+        try:
+            c = sqlite3.connect(f"file:{H}/.hermes/kanban/boards/{h['board']}/kanban.db?mode=ro", uri=True)
+            st = c.execute("SELECT status FROM tasks WHERE id=?", (h["task"],)).fetchone()
+            ev = dict(c.execute("SELECT kind, count(*) FROM task_events WHERE task_id=? AND created_at>=? GROUP BY kind",
+                                (h["task"], h["t"])).fetchall())
+        except sqlite3.Error:
+            continue
+        k = (h["rol"], h["ruta"])
+        f = filas.setdefault(k, {"n": 0, "hechas": 0, "primera": 0, "rondas": 0, "fallos": 0})
+        f["n"] += 1
+        hecha = bool(st) and st[0] == "done"
+        f["hechas"] += hecha
+        rondas = ev.get("changes_requested", 0)
+        f["rondas"] += rondas
+        f["primera"] += hecha and rondas == 0
+        f["fallos"] += ev.get("crashed", 0) + ev.get("timed_out", 0) + ev.get("gave_up", 0)
+    if como_json:
+        print(json.dumps({"dias": dias, "asignaciones": len(hist), "filas": [
+            {"rol": rol, "ruta": ruta, "tarjetas": f["n"], "hechas": f["hechas"],
+             "primera_pct": round(100 * f["primera"] / f["hechas"]) if f["hechas"] else None,
+             "rondas_por_tarjeta": round(f["rondas"] / f["n"], 2), "fallos": f["fallos"]}
+            for (rol, ruta), f in sorted(filas.items())]}, ensure_ascii=False))
+        return
+    print(f"Últimos {dias} días · {len(hist)} asignaciones")
+    print(f"{'rol':12} {'modelo':12} {'tarj.':>5} {'hechas':>6} {'1ª vez':>7} {'rondas/t':>8} {'fallos':>6}")
+    for (rol, ruta), f in sorted(filas.items()):
+        pv = f"{100 * f['primera'] / f['hechas']:.0f}%" if f["hechas"] else "-"
+        rt = f"{f['rondas'] / f['n']:.2f}"
+        print(f"{rol:12} {ruta:12} {f['n']:5} {f['hechas']:6} {pv:>7} {rt:>8} {f['fallos']:6}")
+    print("«1ª vez» = terminadas sin ninguna petición de cambios del revisor (para programador es lo que importa).")
+
+
+if __name__ == "__main__":
+    a = [x for x in sys.argv[1:] if x != "--json"]
+    como_json = len(a) < len(sys.argv) - 1
+    if a and a[0] == "comprobar":   # no necesita el reparto (ni uv/PyYAML): solo mira ~/.hermes
+        res = canal_avisos.comprobar(H)
+        if como_json:
+            print(json.dumps(res, ensure_ascii=False))
+        for r in ([] if como_json else res):
+            print(f"{'✅' if r['nivel'] == 'ok' else '⛔'} {r['que']}: {r['motivo']}")
+        sys.exit(1 if any(r["nivel"] == "fallo" for r in res) else 0)
+    aplicar_reparto(config_modelos())
+    if not a or a[0] == "estado":
+        estado(como_json)
+    elif a[0] == "tick":
+        tick()
+    elif a[0] == "asignar":
+        asignar(a[1])
+    elif a[0] == "informe":
+        informe(int(a[1]) if len(a) > 1 else 14, como_json)

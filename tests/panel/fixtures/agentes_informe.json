@@ -1,0 +1,33 @@
+{
+ "dias": 14,
+ "asignaciones": 6,
+ "filas": [
+  {
+   "rol": "programador",
+   "ruta": "kimi",
+   "tarjetas": 1,
+   "hechas": 1,
+   "primera_pct": 0,
+   "rondas_por_tarjeta": 1.0,
+   "fallos": 1
+  },
+  {
+   "rol": "programador",
+   "ruta": "opus",
+   "tarjetas": 1,
+   "hechas": 0,
+   "primera_pct": null,
+   "rondas_por_tarjeta": 0.0,
+   "fallos": 0
+  },
+  {
+   "rol": "tester",
+   "ruta": "kimi",
+   "tarjetas": 1,
+   "hechas": 1,
+   "primera_pct": 100,
+   "rondas_por_tarjeta": 0.0,
+   "fallos": 0
+  }
+ ]
+}

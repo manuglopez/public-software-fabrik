@@ -1,0 +1,15 @@
+{
+  "disponible": true,
+  "avisos": ["rate-limited: timeout tras 25s: fabrik-cupos"],
+  "bolsas_historico": [
+    {"bolsa": "kimi_5h", "puntos": [[1799000000, 10.0], [1799040000, 40.0], [1799080000, 25.5]]},
+    {"bolsa": "solo_uno", "puntos": [[1799080000, 7.0]]}
+  ],
+  "rate_limited": [
+    {"dia": "2026-10-22", "n": 0, "esperas": 0},
+    {"dia": "2026-10-23", "n": 8, "esperas": 4},
+    {"dia": "2026-10-24", "n": 2, "esperas": 1}
+  ],
+  "pago": [{"proveedor": "deepseek", "usd": 1.75, "sesiones": 2, "permitido": false}],
+  "tokens": [{"familia": "kimi", "entrada": 100, "salida": 20, "cache": 3000}]
+}

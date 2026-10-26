@@ -82,6 +82,7 @@ export FABRIK_PROFILES_DIR="$tmp/profiles"
 # kanban_home() (connect/create_board) resuelve por HERMES_KANBAN_HOME como raíz
 # hermes (boards en <raíz>/kanban/boards) y no por HOME; sin esto el tablero
 # temporal acabaría en el kanban real de ~/.hermes.
+export FABRIK_MODELOS=off   # aísla el aparcado por cupo del reparto de modelos
 export HERMES_KANBAN_HOME="$tmp/home/.hermes"
 
 foto_agotada() { # toda la cadena (kimi + claude) al 100 %, resets futuros
@@ -183,6 +184,21 @@ if [ "$n5" -eq 1 ] && [ "$n6" -eq 1 ]; then ok_; else fallo "AC-3 un aviso por p
 env -u VIRTUAL_ENV -u HERMES_DELEGATED_CHILD_CONTEXT -u HERMES_KANBAN_DB -u HERMES_KANBAN_BOARD PYTHONPATH="$HA" HOME="$tmp/home" "$PY" "$HELPER" comentario pruebas "$T2" "humano-uno" "⏳ esperando cupo de kimi_5h (renueva 24/10 05:00 hora local); cadena agotada: kimi_5h, claude_5h" || fallo "insertar comentario ⏳"
 pasada 8
 if [ "$(cuenta 'conserje chat')" -eq 0 ]; then ok_; else fallo "el conserje no debe procesar el comentario ⏳"; fi
+
+# --- tablero aislado: ni enrutador ni conserje ---------------------------------
+TA=$(env -u VIRTUAL_ENV -u HERMES_DELEGATED_CHILD_CONTEXT -u HERMES_KANBAN_DB -u HERMES_KANBAN_BOARD PYTHONPATH="$HA" HOME="$tmp/home" "$PY" "$HELPER" crear '[
+  {"title": "TA perfil propio del experimento", "assignee": "experimento-x"}
+]') || fallo "crear tarjeta del tablero aislado"
+env -u VIRTUAL_ENV -u HERMES_DELEGATED_CHILD_CONTEXT -u HERMES_KANBAN_DB -u HERMES_KANBAN_BOARD PYTHONPATH="$HA" HOME="$tmp/home" "$PY" "$HELPER" comentario pruebas "$TA" "humano-uno" "¿cómo va esto?" || fallo "insertar comentario humano"
+mkdir -p "$tmp/home/.hermes/factory"
+printf '# experimentos\npruebas\n' > "$tmp/home/.hermes/factory/tableros-aislados"
+conserje_antes=$(cuenta 'conserje chat')
+pasada 9
+if [ "$(cuenta "assign $TA ")" -eq 0 ]; then ok_; else fallo "tablero aislado: $TA no debe reasignarse al orquestador"; fi
+if [ "$(cuenta 'conserje chat')" -eq "$conserje_antes" ]; then ok_; else fallo "tablero aislado: el conserje no debe contestar"; fi
+rm -f "$tmp/home/.hermes/factory/tableros-aislados"
+pasada 10   # control: sin la lista, la misma tarjeta sí se enruta
+if [ "$(cuenta "assign $TA ")" -eq 1 ]; then ok_; else fallo "control: sin aislar, $TA se enruta al orquestador"; fi
 
 echo "$ok ok / $fail fallos"
 [ "$fail" -eq 0 ]

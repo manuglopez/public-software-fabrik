@@ -17,21 +17,32 @@ Uso: uv run --with pyyaml python fabrik_config.py <ver|get <clave.punteada>|camp
 - campos: para una lista de objetos, imprime los campos pedidos unidos por '|' (una línea por objeto).
 - requisitos: qué exige cada proveedor de `modelos`, del pool efectivo y de la reserva final
   (api_key <CLAVE> o plugin <proveedor>).
-- validar: comprueba el esquema de `modelos.pool`, `reserva_final` y `permitir_pago`; un error por línea (stderr)
-  con su ruta. `cargar()` no valida.
+- validar: comprueba el esquema de `modelos.pool`, `reserva_final`, `permitir_pago`, `reparto` y `reglas`; un error
+  por línea (stderr) con su ruta. `cargar()` no valida.
 Exit codes: 0 ok · 1 clave no encontrada · 2 YAML inválido (indica el fichero) · 3 config inválida (validar).
 
-Dentro de `modelos` las claves `pool`, `reserva_final` y `permitir_pago` no son roles (`roles(config)`).
-Las listas de cada nivel de `pool`, `reserva` y `reserva_final` se reemplazan con la capa superior
-(no se concatenan); `reserva_final: null` en una capa superior la anula.
+Dentro de `modelos` las claves `pool`, `reserva_final`, `permitir_pago`, `reparto` y `reglas` no son roles
+(`roles(config)`). Las listas de cada nivel de `pool`, `reserva` y `reserva_final` se reemplazan con la capa superior
+(no se concatenan); `reserva_final: null` en una capa superior la anula. En `reparto` (reparto dinámico de
+bin/fabrik-modelos, plan The Factory D-5) y `reglas` (D-6) los mapas se fusionan y las listas se reemplazan: el
+orden de los candidatos importa. `guardar_reparto()` escribe solo `modelos.reparto` en la config personal.
 """
 import json
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
-import yaml
+try:
+    import yaml
+except ImportError:
+    # Dentro de Hermes (panel) el núcleo no trae PyYAML sino ruamel vía `hermes_yaml` (misma API: safe_load,
+    # safe_dump, YAMLError). Sin ninguno, las constantes de DEFECTO se importan igual; leer o escribir YAML sí lo exige.
+    try:
+        import hermes_yaml as yaml
+    except ImportError:
+        yaml = None
 
 REPO = Path(__file__).resolve().parent.parent
 EJEMPLO = "ejemplo"
@@ -61,11 +72,73 @@ MOTOR = {
         # Claves reservadas (no son roles).
         "permitir_pago": False,
         "reserva_final": None,
+        # Reglas genéricas del reparto (D-6). Las que nombran modelos concretos (prohibidos_codigo,
+        # sufijo_obligatorio) y todo `reparto` son personales.
+        "reglas": {"roles_codigo": ["programador", "tester"], "revisor_otra_familia": True},
     },
 }
 
+# Nombres de proveedor (plugins de Hermes) que bin/ y scripts/ usan sin tenerlos escritos.
+PROVEEDOR_CLAUDE = "claude-subscription-directsdk-experimental"
+PROVEEDOR_AGY = "antigravity-oauth"
+
+# Reparto de modelos por defecto (plan The Factory D-5): lo que lee bin/fabrik-modelos cuando la config no trae
+# `modelos.reparto`. Vive aquí y no en el script porque nombra modelos concretos. No pasa por MOTOR: la config
+# fusionada sigue sin `reparto` (es personal); esto es solo el valor de reserva del reparto.
+# ruta → proveedor, modelo, familia, cuenta_claude (cuenta de Claude propia) y bolsas que consume.
+REPARTO_DEFECTO = {
+    "rutas": {
+        "fable": {"proveedor": PROVEEDOR_CLAUDE, "modelo": "claude-fable-5-1", "familia": "anthropic",
+                  "cuenta_claude": True, "bolsas": ["claude_5h", "fable_sem"]},
+        "opus": {"proveedor": PROVEEDOR_CLAUDE, "modelo": "claude-opus-5-5", "familia": "anthropic",
+                 "cuenta_claude": True, "bolsas": ["claude_5h", "claude_sem"]},
+        "sonnet": {"proveedor": PROVEEDOR_CLAUDE, "modelo": "claude-sonnet-5-5", "familia": "anthropic",
+                   "cuenta_claude": True, "bolsas": ["claude_5h", "claude_sem"]},
+        "agy-opus": {"proveedor": PROVEEDOR_AGY, "modelo": "claude-opus-5-5-high", "familia": "anthropic",
+                     "cuenta_claude": False, "bolsas": ["agy_claude_5h", "agy_claude_sem"]},
+        "agy-sonnet": {"proveedor": PROVEEDOR_AGY, "modelo": "claude-sonnet-5-5-high", "familia": "anthropic",
+                       "cuenta_claude": False, "bolsas": ["agy_claude_5h", "agy_claude_sem"]},
+        "kimi": {"proveedor": "kimi-coding", "modelo": "kimi-for-coding", "familia": "moonshot",
+                 "cuenta_claude": False, "bolsas": ["kimi_5h", "kimi_7d"]},
+        "gemini-high": {"proveedor": PROVEEDOR_AGY, "modelo": "gemini-3.8-flash-high", "familia": "google",
+                        "cuenta_claude": False, "bolsas": ["gemini_5h", "gemini_sem"]},
+        "gemini-med": {"proveedor": PROVEEDOR_AGY, "modelo": "gemini-3.8-flash-medium", "familia": "google",
+                       "cuenta_claude": False, "bolsas": ["gemini_5h", "gemini_sem"]},
+    },
+    # rol → brazos del experimento (orden = preferencia cuando hay empate)
+    "roles": {
+        "programador": ["opus", "kimi", "agy-opus", "sonnet"],
+        "tester": ["opus", "kimi", "agy-sonnet", "sonnet"],
+        "revisor": ["opus", "agy-opus", "sonnet"],
+        "seguridad": ["opus", "agy-opus", "sonnet"],
+        "orquestador": ["opus", "agy-opus", "sonnet"],
+        "explorador": ["gemini-med", "gemini-high"],
+        "docs": ["gemini-med", "gemini-high"],
+    },
+    "ultimo_recurso": "gemini-high",
+    "topes": {"5h": 92, "sem": 97, "7d": 97, "30d": 60},
+}
+
+# Bolsas que consume cada pareja (proveedor, modelo); lo lee scripts/cupos.py (bolsas_de). Rige la primera regla
+# que case. `casa`: «igual» (proveedor exacto) o «prefijo»; `modelos`: prefijos (None = cualquier modelo).
+BOLSAS_DEFECTO = [
+    {"proveedor": "kimi-coding", "casa": "prefijo", "modelos": None, "bolsas": ["kimi_5h", "kimi_7d"]},
+    {"proveedor": PROVEEDOR_AGY, "casa": "igual", "modelos": ["gemini-4-argon"], "bolsas": ["argon_sem"]},
+    {"proveedor": PROVEEDOR_AGY, "casa": "igual", "modelos": ["gemini-"], "bolsas": ["gemini_5h", "gemini_sem"]},
+    {"proveedor": PROVEEDOR_AGY, "casa": "igual", "modelos": ["claude", "gpt-oss"],
+     "bolsas": ["agy_claude_5h", "agy_claude_sem"]},
+    {"proveedor": "claude-subscription", "casa": "prefijo", "modelos": None, "bolsas": ["claude_5h", "claude_sem"]},
+    {"proveedor": "openai-codex", "casa": "prefijo", "modelos": None, "bolsas": ["openai_30d"]},
+]
+
 # Dentro de `modelos`, estas claves no son roles. Usa siempre `roles(config)` para recorrerlos.
-CLAVES_RESERVADAS = ("pool", "reserva_final", "permitir_pago")
+CLAVES_RESERVADAS = ("pool", "reserva_final", "permitir_pago", "reparto", "reglas")
+# Esquema de modelos.reparto y modelos.reglas: clave → comprobación (ver _validar_reparto).
+CAMPOS_RUTA = {"proveedor": "texto", "modelo": "texto", "familia": "texto", "cuenta_claude": "bool",
+               "bolsas": "lista_texto"}
+CLAVES_REPARTO = ("rutas", "roles", "ultimo_recurso", "topes", "topes_cuenta", "aviso_bolsa")
+CLAVES_REGLAS = {"roles_codigo": "lista_texto", "prohibidos_codigo": "lista_texto",
+                 "sufijo_obligatorio": "mapa_texto", "revisor_otra_familia": "bool"}
 NIVELES_POOL = ("ligero", "medio", "dificil", "critico")  # orden canónico
 COSTES_POOL = ("suscripcion", "pago")
 
@@ -136,6 +209,13 @@ def _clave_dedupe(item):
     return json.dumps(item, sort_keys=True, ensure_ascii=False) if isinstance(item, dict) else item
 
 
+def _fusionar_reemplazando(base, encima):
+    """Dicts recursivos; listas y escalares, los de la capa superior (reparto y reglas)."""
+    if isinstance(base, dict) and isinstance(encima, dict):
+        return {**base, **{k: _fusionar_reemplazando(base[k], v) if k in base else v for k, v in encima.items()}}
+    return encima
+
+
 def fusionar(base, encima):
     """Listas concatenadas sin duplicados; dicts recursivos; escalares sobrescritos."""
     if isinstance(base, dict) and isinstance(encima, dict):
@@ -151,6 +231,8 @@ def fusionar(base, encima):
                 # Cada nivel del pool reemplaza al de la capa inferior (sin concatenar);
                 # los niveles que la capa superior no menciona se heredan.
                 resultado[clave] = {**base[clave], **valor}
+            elif clave in ("reparto", "reglas"):
+                resultado[clave] = _fusionar_reemplazando(base[clave], valor) if clave in base else valor
             else:
                 resultado[clave] = fusionar(base[clave], valor) if clave in base else valor
         return resultado
@@ -242,7 +324,7 @@ def _modelos(config):
 
 
 def roles(config):
-    """{rol: datos} de `modelos`, sin las claves reservadas (pool, reserva_final, permitir_pago).
+    """{rol: datos} de `modelos`, sin las claves reservadas (CLAVES_RESERVADAS).
 
     Único punto por el que los consumidores recorren los roles.
     """
@@ -286,8 +368,82 @@ def _no_vacio(valor):
     return isinstance(valor, str) and bool(valor.strip())
 
 
+def _tipo_mal(valor, tipo):
+    """Texto del error si `valor` no es del `tipo` del esquema; None si lo es."""
+    if tipo == "texto":
+        return None if _no_vacio(valor) else "texto no vacío"
+    if tipo == "bool":
+        return None if isinstance(valor, bool) else "true o false"
+    if tipo == "lista_texto":
+        return None if isinstance(valor, list) and all(_no_vacio(x) for x in valor) else "lista de textos"
+    if tipo == "mapa_texto":
+        return None if isinstance(valor, dict) else "mapa patrón → texto"
+    if tipo == "tope":
+        ok = isinstance(valor, int) and not isinstance(valor, bool) and 1 <= valor <= 100
+        return None if ok else "entero entre 1 y 100"
+    raise ValueError(tipo)
+
+
+def _validar_mapa(errores, ruta, valor, tipo_valor, que):
+    if not isinstance(valor, dict):
+        errores.append(f"{ruta}: debe ser un mapa {que}")
+        return
+    for k, v in valor.items():
+        mal = _tipo_mal(v, tipo_valor)
+        if mal:
+            errores.append(f"{ruta}.{k}: {mal}")
+
+
+def _validar_reparto(errores, reparto, reglas):
+    """Esquema (tipos) de `modelos.reparto` y `modelos.reglas`. Las reglas de contenido (rutas que existen,
+    prohibidos, sufijos…) son de dashboard/fx_reglas.py: aquí una capa puede traer solo una parte."""
+    if reparto is not None:
+        if not isinstance(reparto, dict):
+            errores.append(f"modelos.reparto: debe ser un mapa ({', '.join(CLAVES_REPARTO)})")
+            reparto = {}
+        for clave in reparto:
+            if clave not in CLAVES_REPARTO:
+                errores.append(f"modelos.reparto.{clave}: clave desconocida (válidas: {', '.join(CLAVES_REPARTO)})")
+        rutas = reparto.get("rutas", {})
+        if not isinstance(rutas, dict):
+            errores.append("modelos.reparto.rutas: debe ser un mapa nombre → {proveedor, modelo, familia, …}")
+            rutas = {}
+        for nombre, r in rutas.items():
+            if not isinstance(r, dict):
+                errores.append(f"modelos.reparto.rutas.{nombre}: debe ser un mapa {{{', '.join(CAMPOS_RUTA)}}}")
+                continue
+            for campo, v in r.items():
+                mal = _tipo_mal(v, CAMPOS_RUTA[campo]) if campo in CAMPOS_RUTA else "campo desconocido"
+                if mal:
+                    errores.append(f"modelos.reparto.rutas.{nombre}.{campo}: {mal}")
+        if "roles" in reparto:
+            _validar_mapa(errores, "modelos.reparto.roles", reparto["roles"], "lista_texto", "rol → lista de rutas")
+        if "ultimo_recurso" in reparto and not _no_vacio(reparto["ultimo_recurso"]):
+            errores.append("modelos.reparto.ultimo_recurso: nombre de ruta, texto no vacío")
+        for clave in ("topes", "topes_cuenta"):
+            if clave in reparto:
+                _validar_mapa(errores, f"modelos.reparto.{clave}", reparto[clave], "tope", "→ % (1-100)")
+        if "aviso_bolsa" in reparto:
+            mal = _tipo_mal(reparto["aviso_bolsa"], "tope")
+            if mal:
+                errores.append(f"modelos.reparto.aviso_bolsa: {mal}")
+    if reglas is not None:
+        if not isinstance(reglas, dict):
+            errores.append(f"modelos.reglas: debe ser un mapa ({', '.join(CLAVES_REGLAS)})")
+            return
+        for clave, v in reglas.items():
+            if clave not in CLAVES_REGLAS:
+                errores.append(f"modelos.reglas.{clave}: clave desconocida (válidas: {', '.join(CLAVES_REGLAS)})")
+            elif clave == "sufijo_obligatorio":
+                _validar_mapa(errores, "modelos.reglas.sufijo_obligatorio", v, "texto", "patrón → sufijo")
+            else:
+                mal = _tipo_mal(v, CLAVES_REGLAS[clave])
+                if mal:
+                    errores.append(f"modelos.reglas.{clave}: {mal}")
+
+
 def validar(config):
-    """Errores de esquema de `modelos.pool`, `modelos.reserva_final` y `modelos.permitir_pago`,
+    """Errores de esquema de `modelos.pool`, `reserva_final`, `permitir_pago`, `reparto` y `reglas`,
     uno por elemento de la lista, cada uno con su ruta. [] si todo está bien."""
     errores = []
     modelos = (config or {}).get("modelos")
@@ -295,6 +451,7 @@ def validar(config):
         return errores
     if not isinstance(modelos, dict):
         return ["modelos: debe ser un mapa de roles"]
+    _validar_reparto(errores, modelos.get("reparto"), modelos.get("reglas"))
     if "permitir_pago" in modelos and not isinstance(modelos["permitir_pago"], bool):
         errores.append("modelos.permitir_pago: debe ser true o false")
     rf = modelos.get("reserva_final")
@@ -521,6 +678,40 @@ def modelos_previos(cfg_path, pack_path=None):
     return [f for c in carpetas for f in sorted((c / "tests" / "fixtures").glob("modelos-*.yaml"))]
 
 
+def guardar_reparto(parcial, cfg_path=None):
+    """Escribe en la config personal (o `cfg_path`) SOLO `modelos.reparto` y conserva el resto del fichero. Cada clave
+    de `parcial` se funde a un nivel con la que hubiera: en los mapas (roles, topes, topes_cuenta, rutas) cada entrada
+    dada sustituye a la suya y las demás se quedan; `ultimo_recurso` se sustituye. Sigue los enlaces simbólicos y
+    escribe de forma atómica. ValueError (con las rutas) si el resultado no cumple el esquema. Devuelve la ruta real."""
+    destino = Path(os.path.realpath(cfg_path or config_personal_path()))
+    data = cargar_yaml(destino)
+    if not isinstance(data, dict):
+        raise ValueError(f"{destino}: la config personal no es un mapa")
+    modelos = data.get("modelos") if isinstance(data.get("modelos"), dict) else {}
+    anterior = modelos.get("reparto") if isinstance(modelos.get("reparto"), dict) else {}
+    nuevo = dict(anterior)
+    for clave, valor in dict(parcial).items():
+        previo = anterior.get(clave)
+        nuevo[clave] = {**previo, **valor} if isinstance(previo, dict) and isinstance(valor, dict) else valor
+    errores = []
+    _validar_reparto(errores, nuevo, None)
+    if errores:
+        raise ValueError("; ".join(errores))
+    data["modelos"] = {**modelos, "reparto": nuevo}
+    destino.parent.mkdir(parents=True, exist_ok=True)
+    # temporal único en el mismo directorio: el panel puede guardar desde dos hilos del mismo proceso
+    fd, nombre = tempfile.mkstemp(prefix=f"{destino.name}.", suffix=".tmp", dir=destino.parent)
+    tmp = Path(nombre)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(yaml.safe_dump(data, allow_unicode=True, sort_keys=False, width=120))
+        os.chmod(tmp, destino.stat().st_mode & 0o7777 if destino.exists() else 0o644)
+        os.replace(tmp, destino)
+    finally:
+        tmp.unlink(missing_ok=True)
+    return destino
+
+
 def anadir_pack(cfg_path, pack_path):
     p = Path(cfg_path)
     if not p.is_file():
@@ -634,7 +825,7 @@ def main(argv):
         print(e, file=sys.stderr)
         return 2
     if comando == "ver":
-        print(yaml.dump(config, sort_keys=False, allow_unicode=True), end="")
+        print(yaml.safe_dump(config, sort_keys=False, allow_unicode=True), end="")
         return 0
     if comando == "get" and len(argv) == 2:
         try:

@@ -1,0 +1,14 @@
+{
+  "items": [
+    {"board": "demo", "task_id": "t_aaa1", "titulo": "Revisar algo", "motivo": "error_cupo_revision",
+     "detalle": "429 usage limit · sin run desde hace 20 min", "accion": {"tipo": "desatascar"},
+     "worktree": "/w/.factory-worktrees/r/a"},
+    {"board": "demo", "task_id": "t_bbb1", "titulo": "IMPL-9 algo", "motivo": "sin_cupo",
+     "detalle": "bolsas agotadas: kimi_5h", "accion": {"tipo": "set_model", "proveedor": "claude-subscription", "modelo": "claude-sonnet-5-5"}},
+    {"board": "demo", "task_id": "t_ccc1", "titulo": "IMPL-8 otra", "motivo": "sin_cupo",
+     "detalle": "todo agotado · renueva vie 2027-01-01 10:00"},
+    {"board": "demo", "task_id": "t_hij1", "titulo": "PR-2 inicio", "motivo": "esperando_merge",
+     "detalle": "espera al PR #7 (PR-1) apilado sobre #5",
+     "accion": {"tipo": "ver_prs", "prs": [{"numero": 7, "url": "https://github.com/o/r/pull/7", "apilado_sobre": "#5"}]}}
+  ]
+}

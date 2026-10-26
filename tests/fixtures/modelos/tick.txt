@@ -1,0 +1,7 @@
+programador  → opus@b  (disponibles: opus@b, kimi, sonnet@b)
+tester       → opus@b  (disponibles: opus@b, kimi, sonnet@b)
+revisor      → opus@b  (disponibles: opus@b, sonnet@b)
+seguridad    → opus@b  (disponibles: opus@b, sonnet@b)
+orquestador  → opus@b  (disponibles: opus@b, sonnet@b)
+explorador   → gemini-high  (disponibles: gemini-high)
+docs         → gemini-high  (disponibles: gemini-high)

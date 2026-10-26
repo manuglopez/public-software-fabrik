@@ -27,4 +27,24 @@ tablero_por_defecto: personal
 #     medio:
 #       - {proveedor: kimi-coding, modelo: kimi-for-coding, herramientas: true, coste: suscripcion}
 #   reserva_final: {proveedor: kimi-coding, modelo: kimi-for-coding}
+#   reparto:                      # reparto dinámico (fabrik-modelos); todo opcional
+#     aviso_bolsa: 98             # % de una bolsa a partir del cual llega un aviso (hermes send, sin modelo); 1-100
+#     topes_cuenta: {a: 90}       # tope semanal por cuenta de Claude (asientos con menos margen)
 modelos: {}
+
+# Tests (bin/factory-test): repos pesados (su suite completa o paralela espera el turno único; el resto va sin turno)
+# y máximo de tests dirigidos a la vez. Sin `repos_pesados`, todos los repos son pesados (lado seguro).
+# tests:
+#   repos_pesados: [api-acme, acme-web]
+#   dirigidos: 4
+#   max_procesos: 4        # tope de -p/--processes/--parallel en paratest, phpunit-replay y `artisan test --parallel`
+#   dusk_pausado: false    # true rechaza Dusk con exit 3 (manda la env FX_TEST_DUSK_PAUSADO, luego el fichero
+#                         # dusk-pausado junto a esta config; con texto, se muestra como motivo)
+#   # Repos con BD de tests fija compartida entre worktrees: sus dirigidos usan LARAVEL_PARALLEL_TESTING=1 y
+#   # TEST_TOKEN=100+hueco (BD <base>_test_<token>) para no serializarse entre sí.
+#   repos_token: [api-acme]
+#   # Replay a la vez: un `phpunit-replay run -p N` de estos repos (con .factory/env) usa un hueco de replay
+#   # (locks/replay.d/<n>.lock, global a la máquina; el hueco n ≥ 2 bloquea la BD `<base>@desfase<k>`) y exporta
+#   # FX_TOKEN_OFFSET=(hueco-1)×max_procesos, así dos worktrees con la misma BD base corren a la vez. Requiere que el repo acepte FX_TOKEN_OFFSET (token de Laravel = TEST_TOKEN + offset).
+#   replay_simultaneo: []   # env FX_TEST_REPOS_REPLAY (aunque esté vacía) manda sobre esta lista
+#   replay_huecos: 2        # env FX_TEST_REPLAY_HUECOS; un valor que no sea un entero ≥ 1 vale 2

@@ -1,0 +1,12 @@
+{
+  "foto": "2026-10-24T05:20:00+02:00",
+  "bolsas": [
+    {"bolsa": "claude_sem@uno", "usado": 84.4, "renueva": "2026-10-24T18:00:00+02:00"},
+    {"bolsa": "claude_5h@uno", "usado": 9.0, "renueva": "2026-10-24T05:00:00+02:00"},
+    {"bolsa": "kimi_5h", "usado": 100.0, "renueva": "2026-10-24T06:27:10+02:00"},
+    {"bolsa": "kimi_7d", "usado": 85.0, "renueva": "2026-10-26T00:27:11+01:00"},
+    {"bolsa": "gemini_sem", "usado": 0.0, "renueva": "2026-10-31T00:53:42+01:00"},
+    {"bolsa": "agy_claude_sem", "usado": 100.0, "renueva": null}
+  ],
+  "avisos": ["Cupo claude_sem@uno al 84 % (renueva 2026-10-24 18:00)"]
+}

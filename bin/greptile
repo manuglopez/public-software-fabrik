@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# greptile — envoltorio con el mismo nombre que el CLI real de Greptile (~1 $ por ejecución).
+# Va el primero del PATH de los agentes (config/agent-shell.sh) para que tape también las llamadas directas:
+#   greptile review …   → factory-greptile … (tope por rama, caché por diff, árbol sucio, PR abierto y registro)
+#   cualquier otra cosa → el binario real, con sus argumentos y su rc, sin registrar nada (sin argumentos,
+#                         --version, auth, skills…)
+# Binario real: $FABRIK_GREPTILE_BIN o el primer «greptile» del PATH que no viva en el directorio de este script.
+set -uo pipefail
+
+selfdir="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd -P)"
+
+if [[ "${1:-}" == "review" ]]; then
+  shift
+  exec "$selfdir/factory-greptile" "$@"
+fi
+
+BIN="${FABRIK_GREPTILE_BIN:-}"
+if [[ -z "$BIN" ]]; then
+  IFS=: read -r -a dirs <<<"$PATH"
+  for d in "${dirs[@]}"; do
+    [[ -n "$d" && -f "$d/greptile" && -x "$d/greptile" ]] || continue
+    dreal="$(cd "$d" 2>/dev/null && pwd -P)" || continue
+    [[ "$dreal" == "$selfdir" ]] && continue   # cualquier greptile de este directorio es el envoltorio
+    destino="$(readlink -f "$d/greptile")"
+    [[ "$destino" == "$selfdir/greptile" || "$destino" == "$selfdir/factory-greptile" ]] && continue   # un enlace a uno de los dos desde otro directorio
+    BIN="$d/greptile"
+    break
+  done
+fi
+if [[ -z "$BIN" ]]; then
+  echo "greptile: no encuentro el binario real «greptile» en el PATH (define FABRIK_GREPTILE_BIN)" >&2
+  exit 127
+fi
+exec "$BIN" "$@"

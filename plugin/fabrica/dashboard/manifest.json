@@ -1,0 +1,7 @@
+{
+  "name": "fabrica",
+  "label": "The Factory",
+  "description": "Panel de mando de la fábrica de software: qué te toca, qué está atascado, qué corre y con qué modelo. La interfaz es la página de escritorio; este dashboard solo sirve los datos.",
+  "version": "0.1.0",
+  "api": "plugin_api.py"
+}

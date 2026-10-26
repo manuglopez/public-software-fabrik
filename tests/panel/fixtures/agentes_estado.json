@@ -1,0 +1,276 @@
+{
+ "reparto": {
+  "rutas": {
+   "fable": {
+    "proveedor": "claude-subscription-directsdk-experimental",
+    "modelo": "claude-fable-5-1",
+    "familia": "anthropic",
+    "cuenta_claude": true,
+    "bolsas": [
+     "claude_5h",
+     "fable_sem"
+    ]
+   },
+   "opus": {
+    "proveedor": "claude-subscription-directsdk-experimental",
+    "modelo": "claude-opus-5-5",
+    "familia": "anthropic",
+    "cuenta_claude": true,
+    "bolsas": [
+     "claude_5h",
+     "claude_sem"
+    ]
+   },
+   "sonnet": {
+    "proveedor": "claude-subscription-directsdk-experimental",
+    "modelo": "claude-sonnet-5-5",
+    "familia": "anthropic",
+    "cuenta_claude": true,
+    "bolsas": [
+     "claude_5h",
+     "claude_sem"
+    ]
+   },
+   "agy-opus": {
+    "proveedor": "antigravity-oauth",
+    "modelo": "claude-opus-5-5-high",
+    "familia": "anthropic",
+    "cuenta_claude": false,
+    "bolsas": [
+     "agy_claude_5h",
+     "agy_claude_sem"
+    ]
+   },
+   "agy-sonnet": {
+    "proveedor": "antigravity-oauth",
+    "modelo": "claude-sonnet-5-5-high",
+    "familia": "anthropic",
+    "cuenta_claude": false,
+    "bolsas": [
+     "agy_claude_5h",
+     "agy_claude_sem"
+    ]
+   },
+   "kimi": {
+    "proveedor": "kimi-coding",
+    "modelo": "kimi-for-coding",
+    "familia": "moonshot",
+    "cuenta_claude": false,
+    "bolsas": [
+     "kimi_5h",
+     "kimi_7d"
+    ]
+   },
+   "gemini-high": {
+    "proveedor": "antigravity-oauth",
+    "modelo": "gemini-3.8-flash-high",
+    "familia": "google",
+    "cuenta_claude": false,
+    "bolsas": [
+     "gemini_5h",
+     "gemini_sem"
+    ]
+   },
+   "gemini-med": {
+    "proveedor": "antigravity-oauth",
+    "modelo": "gemini-3.8-flash-medium",
+    "familia": "google",
+    "cuenta_claude": false,
+    "bolsas": [
+     "gemini_5h",
+     "gemini_sem"
+    ]
+   }
+  },
+  "roles": {
+   "programador": [
+    "opus",
+    "kimi",
+    "agy-opus",
+    "sonnet"
+   ],
+   "tester": [
+    "opus",
+    "kimi",
+    "agy-sonnet",
+    "sonnet"
+   ],
+   "revisor": [
+    "opus",
+    "agy-opus",
+    "sonnet"
+   ],
+   "seguridad": [
+    "opus",
+    "agy-opus",
+    "sonnet"
+   ],
+   "orquestador": [
+    "opus",
+    "agy-opus",
+    "sonnet"
+   ],
+   "explorador": [
+    "gemini-med",
+    "gemini-high"
+   ],
+   "docs": [
+    "gemini-med",
+    "gemini-high"
+   ]
+  },
+  "ultimo_recurso": "gemini-high",
+  "topes": {
+   "5h": 92,
+   "sem": 97,
+   "7d": 97,
+   "30d": 60
+  },
+  "topes_cuenta": {}
+ },
+ "roles_codigo": [
+  "programador",
+  "tester"
+ ],
+ "estado": [
+  {
+   "ruta": "fable",
+   "cuenta": "a",
+   "ok": true,
+   "motivo": "claude_5h@a 40%; fable_sem@a 10%, se renueva en 12 h (úsalo o piérdelo)"
+  },
+  {
+   "ruta": "fable",
+   "cuenta": "b",
+   "ok": false,
+   "motivo": "sin dato fable_sem@b"
+  },
+  {
+   "ruta": "opus",
+   "cuenta": "a",
+   "ok": true,
+   "motivo": "claude_5h@a 40%; claude_sem@a 93%, se renueva en 12 h (úsalo o piérdelo)"
+  },
+  {
+   "ruta": "opus",
+   "cuenta": "b",
+   "ok": true,
+   "motivo": "claude_5h@b 20%; claude_sem@b 30% (ritmo ≤68%)"
+  },
+  {
+   "ruta": "sonnet",
+   "cuenta": "a",
+   "ok": true,
+   "motivo": "claude_5h@a 40%; claude_sem@a 93%, se renueva en 12 h (úsalo o piérdelo)"
+  },
+  {
+   "ruta": "sonnet",
+   "cuenta": "b",
+   "ok": true,
+   "motivo": "claude_5h@b 20%; claude_sem@b 30% (ritmo ≤68%)"
+  },
+  {
+   "ruta": "agy-opus",
+   "cuenta": null,
+   "ok": false,
+   "motivo": "agy_claude_5h 95% ≥ tope 92%"
+  },
+  {
+   "ruta": "agy-sonnet",
+   "cuenta": null,
+   "ok": false,
+   "motivo": "agy_claude_5h 95% ≥ tope 92%"
+  },
+  {
+   "ruta": "kimi",
+   "cuenta": null,
+   "ok": true,
+   "motivo": "kimi_5h 10%; kimi_7d 50% (ritmo ≤75%)"
+  },
+  {
+   "ruta": "gemini-high",
+   "cuenta": null,
+   "ok": false,
+   "motivo": "gemini_5h 20%; gemini_sem 80% (ritmo ≤36%)"
+  },
+  {
+   "ruta": "gemini-med",
+   "cuenta": null,
+   "ok": false,
+   "motivo": "gemini_5h 20%; gemini_sem 80% (ritmo ≤36%)"
+  }
+ ],
+ "cuentas": [
+  {
+   "cuenta": "a",
+   "sem_pct": 93,
+   "renueva": "2026-10-25T06:00:00Z",
+   "tope": null
+  },
+  {
+   "cuenta": "b",
+   "sem_pct": 30,
+   "renueva": "2026-10-25T06:00:00Z",
+   "tope": null
+  }
+ ],
+ "brazos_7d": [
+  {
+   "rol": "programador",
+   "ruta": "kimi",
+   "n": 2
+  },
+  {
+   "rol": "programador",
+   "ruta": "opus",
+   "n": 1
+  },
+  {
+   "rol": "tester",
+   "ruta": "kimi",
+   "n": 1
+  },
+  {
+   "rol": "tester",
+   "ruta": "sonnet",
+   "n": 1
+  }
+ ],
+ "perfiles": [
+  {
+   "rol": "programador",
+   "proveedor": "claude-subscription-directsdk-experimental",
+   "modelo": "claude-opus-5-5"
+  },
+  {
+   "rol": "tester",
+   "proveedor": "kimi-coding",
+   "modelo": "kimi-for-coding"
+  },
+  {
+   "rol": "revisor",
+   "proveedor": "claude-subscription-directsdk-experimental",
+   "modelo": "claude-opus-5-5"
+  },
+  {
+   "rol": "seguridad",
+   "proveedor": "antigravity-oauth",
+   "modelo": "claude-opus-5-5-high"
+  },
+  {
+   "rol": "orquestador",
+   "proveedor": "claude-subscription-directsdk-experimental",
+   "modelo": "claude-opus-5-5"
+  },
+  {
+   "rol": "explorador",
+   "proveedor": "antigravity-oauth",
+   "modelo": "gemini-3.8-flash-medium"
+  },
+  {
+   "rol": "docs",
+   "proveedor": "antigravity-oauth",
+   "modelo": "gemini-3.8-flash-high"
+  }
+ ]
+}

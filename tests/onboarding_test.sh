@@ -27,6 +27,9 @@ BIN="$tmp/bin"
 mkdir -p "$BIN"
 export FAKE_LOG="$tmp/fake.log"
 export PATH="$BIN:$PATH"
+# Paso del panel The Factory (scripts/instalar-panel.sh): constructor falso, sin node/npm/red; su propio test es panel_install_test.sh.
+printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > "$BIN/construir-panel"; chmod +x "$BIN/construir-panel"
+export FABRIK_PLUGIN_DESKTOP="$BIN/construir-panel"
 
 # --- utilidades ---
 py() { uv run --with pyyaml python -I -c "$@"; }
@@ -742,7 +745,9 @@ home_nuevo mariafull
 PATH="$SAFE" bash "$FABRIK_DIR/install.sh" > "$tmp/out-mariafull.log" 2>&1
 RC=$?
 afirma "instalación completa sin MariaDB: debe avisar con ! de que omite la BD fx" tiene "$tmp/out-mariafull.log" '! +mariadb no instalado; configuración de base de datos fx omitida'
-afirma "instalación completa sin MariaDB: no debe invocar mariadb" iguales "$(grep -c 'mariadb' "$FAKE_LOG" || true)" 0
+# «^mariadb » (con espacio): el comprobador de la unidad rápida llama a «systemctl --user cat
+# fabrica-mariadb», cuyo log contiene el subtexto «mariadb» sin ser una invocación del cliente.
+afirma "instalación completa sin MariaDB: no debe invocar mariadb" iguales "$(grep -c '^mariadb ' "$FAKE_LOG" || true)" 0
 afirma "instalación completa sin MariaDB: no debe crear db.env" test ! -e "$HOME/.config/fabrica/db.env"
 afirma "instalación completa sin MariaDB: no debe marcar ✗ la BD fx (salió $RC)" no_tiene "$tmp/out-mariafull.log" '✗ (no se pudo crear fx|usuario fx)'
 

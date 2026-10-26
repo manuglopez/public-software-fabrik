@@ -1,0 +1,54 @@
+{
+  "_": "Tableros de fixture para test_tablero.py: se vuelcan a SQLite con el subconjunto del esquema de hermes_cli.kanban_db que lee fx_tablero. {STATE_DB} se sustituye por la ruta del state.db de fixture.",
+  "tableros": {
+    "default": {
+      "tasks": [
+        {"id": "t_0000aaaa", "title": "PLAN tienda: pagos con tarjeta", "status": "blocked", "block_kind": "needs_input", "assignee": "orquestador", "created_at": 1000},
+        {"id": "t_0000bbbb", "title": "PR-1 tienda: pagos", "status": "done", "assignee": "programador", "created_at": 1001},
+        {"id": "t_0000bbb2", "title": "PR-2 tienda: ya mergeado", "status": "done", "assignee": "programador", "created_at": 1002},
+        {"id": "t_0000bbb3", "title": "CIERRE tienda: no es PR aunque publique", "status": "done", "assignee": "programador", "created_at": 1003},
+        {"id": "t_0000bbb4", "title": "PRUEBA de humo: no es tipo PR", "status": "done", "assignee": "tester", "created_at": 1004},
+        {"id": "t_0000cccc", "title": "IMPL-1 tienda: pasarela", "status": "running", "assignee": "programador", "model_override": "modelo-rapido", "workspace_kind": "dir", "workspace_path": "/codigo/.factory-worktrees/tienda/pagos", "started_at": 1700000000, "current_run_id": 2, "created_at": 1005},
+        {"id": "t_0000dddd", "title": "REVISION tienda", "status": "running", "assignee": "revisor", "workspace_kind": "scratch", "started_at": 1700000300, "current_run_id": 3, "created_at": 1006},
+        {"id": "t_0000eeee", "title": "IMPL-2 tienda: falta acceso", "status": "blocked", "block_kind": "capability", "assignee": "programador", "created_at": 1007},
+        {"id": "t_0000ffff", "title": "IMPL-3 tienda: espera a otra", "status": "blocked", "block_kind": "dependency", "assignee": "programador", "created_at": 1008},
+        {"id": "t_00001111", "title": "PLAN tienda: viejo sin tipo", "status": "blocked", "assignee": "orquestador", "created_at": 1009}
+      ],
+      "runs": [
+        {"id": 1, "task_id": "t_0000bbbb", "status": "done", "started_at": 900, "metadata": "{\"published_pr\": \"https://github.com/acme/tienda/pull/7\"}"},
+        {"id": 4, "task_id": "t_0000bbb2", "status": "done", "started_at": 901, "metadata": "{\"published_pr\": \"https://github.com/acme/tienda/pull/6\"}"},
+        {"id": 5, "task_id": "t_0000bbb3", "status": "done", "started_at": 902, "metadata": "{\"published_pr\": \"https://github.com/acme/tienda/pull/5\"}"},
+        {"id": 2, "task_id": "t_0000cccc", "status": "running", "started_at": 1700000060},
+        {"id": 3, "task_id": "t_0000dddd", "status": "running", "started_at": 1700000300}
+      ],
+      "events": [
+        {"task_id": "t_0000aaaa", "kind": "blocked", "payload": "{\"reason\": \"viejo\"}"},
+        {"task_id": "t_0000aaaa", "kind": "blocked", "payload": "{\"reason\": \"\\n¿Apruebas el plan de pagos? Responde «adelante»\\nDetalle largo del plan\"}"},
+        {"task_id": "t_0000eeee", "kind": "blocked", "payload": "{\"reason\": \"Sin credenciales de la pasarela\\nmás detalle\"}"},
+        {"task_id": "t_0000cccc", "run_id": 1, "kind": "owner_admitted", "payload": "{\"db\": \"{STATE_DB}\", \"session_id\": \"sesion-vieja\"}"},
+        {"task_id": "t_0000cccc", "run_id": 2, "kind": "owner_admitted", "payload": "{\"db\": \"{STATE_DB}\", \"session_id\": \"sesion-1\"}"},
+        {"task_id": "t_0000dddd", "run_id": 3, "kind": "owner_admitted", "payload": "{\"db\": \"/no/existe/state.db\", \"session_id\": \"sesion-2\"}"}
+      ]
+    },
+    "tienda": {
+      "tasks": [
+        {"id": "t_1111aaaa", "title": "IMPL tienda: aparcada", "status": "scheduled", "assignee": "programador", "created_at": 2000},
+        {"id": "t_1111bbbb", "title": "IMPL tienda: otra aparcada", "status": "scheduled", "assignee": "programador", "created_at": 2001},
+        {"id": "t_1111cccc", "title": "IMPL tienda: en revisión aparcada", "status": "review", "created_at": 2002}
+      ],
+      "runs": [],
+      "events": []
+    }
+  },
+  "sesiones": [
+    {"id": "sesion-vieja", "api_call_count": 1, "tool_call_count": 1},
+    {"id": "sesion-1", "api_call_count": 59, "tool_call_count": 71}
+  ],
+  "perfiles": {"programador": "modelo-perfil-prog", "revisor": "modelo-perfil-rev"},
+  "config": {"kanban": {"max_in_progress": 8}},
+  "pausa_tsv": "tienda\tt_1111cccc\trevisor\n",
+  "gh": {
+    "https://github.com/acme/tienda/pull/7": {"state": "OPEN", "url": "https://github.com/acme/tienda/pull/7"},
+    "https://github.com/acme/tienda/pull/6": {"state": "MERGED", "url": "https://github.com/acme/tienda/pull/6"}
+  }
+}

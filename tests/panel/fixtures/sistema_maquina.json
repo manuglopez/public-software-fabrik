@@ -1,0 +1,15 @@
+{
+  "ram": {"usado_gb": 20.0, "total_gb": 31.0},
+  "cpu": {"carga": 6.4, "nucleos": 16},
+  "suite": {
+    "titular": {
+      "texto": "programador pid=100 repo=software-fabrik [IMPL-4] cmd=bash tests/panel_backend_test.sh desde=18:31:02",
+      "quien": "programador", "pid": "100", "repo": "software-fabrik", "etiqueta": "IMPL-4",
+      "cmd": "bash tests/panel_backend_test.sh", "desde": "18:31:02"
+    },
+    "cola": [
+      {"pid": 300, "repo": "web", "cmd": "npm test", "prioridad": true},
+      {"pid": 200, "repo": "api-acme", "cmd": "vendor/bin/phpunit", "prioridad": false}
+    ]
+  }
+}

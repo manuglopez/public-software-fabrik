@@ -1,0 +1,27 @@
+{
+  "disponible": true,
+  "avisos": ["gh acme/blog: HTTP 502"],
+  "productos": [
+    {
+      "nombre": "tienda",
+      "nota": "Tienda online multimarca",
+      "repos": [
+        {
+          "repo": "web-tienda", "full_name": "acme/web-tienda", "ritmo": "diario", "estado": "activo",
+          "tarjetas_activas": 2,
+          "tarjetas": [
+            {"board": "tienda", "task_id": "t_aaaa0001", "titulo": "IMPL carrito", "estado": "running"},
+            {"board": "tienda", "task_id": "t_aaaa0002", "titulo": "IMPL precios", "estado": "ready"}
+          ],
+          "prs": [{"numero": 12, "titulo": "feat: carrito persistente", "url": "https://github.com/acme/web-tienda/pull/12"}]
+        },
+        {"repo": "api-tienda", "full_name": "acme/api-tienda", "ritmo": "semanal", "estado": "activo", "tarjetas_activas": 0, "tarjetas": [], "prs": []}
+      ]
+    },
+    {
+      "nombre": "Sin producto",
+      "nota": "",
+      "repos": [{"repo": "blog", "full_name": "acme/blog", "ritmo": "", "estado": "activo", "tarjetas_activas": 0, "tarjetas": [], "prs": []}]
+    }
+  ]
+}

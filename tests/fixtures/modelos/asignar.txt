@@ -1,0 +1,4 @@
+demo t_prog programador → sonnet@b
+demo t_impl tester → kimi
+demo t_cierre revisor → opus@b
+demo t_docs docs → gemini-high

@@ -487,7 +487,7 @@ def check(nombre, cond):
 def e(prov, mod, herr=True, coste="suscripcion"):
     return {"proveedor": prov, "modelo": mod, "herramientas": herr, "coste": coste}
 
-RESERVADAS = {"pool", "reserva_final", "permitir_pago"}
+RESERVADAS = {"pool", "reserva_final", "permitir_pago", "reparto", "reglas"}
 
 # roles(): excluye las claves reservadas
 cfg = {"modelos": {"tester": {"proveedor": "a", "modelo": "b"},
@@ -733,6 +733,50 @@ caso_invalido "nivel desconocido" "modelos.pool.experto" \
 caso_invalido "reserva_final sin modelo" "modelos.reserva_final.modelo" \
 '  reserva_final:
     proveedor: a'
+
+# ---------- The Factory D-5/D-6: modelos.reparto y modelos.reglas (claves reservadas, esquema, guardar) ----------
+caso_invalido "reparto: tope fuera de rango" "modelos.reparto.topes.5h" \
+'  reparto:
+    topes: {"5h": 150}'
+caso_invalido "reparto: tope no entero" "modelos.reparto.topes_cuenta.a" \
+'  reparto:
+    topes_cuenta: {a: "90"}'
+caso_invalido "reparto: candidatos no lista" "modelos.reparto.roles.programador" \
+'  reparto:
+    roles: {programador: opus}'
+caso_invalido "reparto: ruta con bolsas mal" "modelos.reparto.rutas.kimi.bolsas" \
+'  reparto:
+    rutas: {kimi: {proveedor: kimi-coding, bolsas: kimi_5h}}'
+caso_invalido "reparto: ultimo_recurso vacío" "modelos.reparto.ultimo_recurso" \
+'  reparto:
+    ultimo_recurso: ""'
+caso_invalido "reparto: clave desconocida" "modelos.reparto.cadena_codigo" \
+'  reparto:
+    cadena_codigo: [opus]'
+caso_invalido "AC-6c reparto: aviso_bolsa 0" "modelos.reparto.aviso_bolsa" \
+'  reparto:
+    aviso_bolsa: 0'
+caso_invalido "AC-6c reparto: aviso_bolsa texto" "modelos.reparto.aviso_bolsa" \
+'  reparto:
+    aviso_bolsa: "x"'
+caso_invalido "AC-6c reparto: aviso_bolsa 101" "modelos.reparto.aviso_bolsa" \
+'  reparto:
+    aviso_bolsa: 101'
+caso_invalido "reglas: booleano" "modelos.reglas.revisor_otra_familia" \
+'  reglas:
+    revisor_otra_familia: "si"'
+caso_invalido "reglas: sufijo no texto" "modelos.reglas.sufijo_obligatorio.gemini-*" \
+'  reglas:
+    sufijo_obligatorio: {"gemini-*": 3}'
+caso_invalido "reglas: roles_codigo no lista" "modelos.reglas.roles_codigo" \
+'  reglas:
+    roles_codigo: programador'
+
+if env HOME="$HOME" FABRIK_DIR="$FABRIK_DIR" T_TMP="$tmp" uv run --with pyyaml python "$FABRIK_DIR/tests/fabrik_config_reparto.py" > "$tmp/out-rep" 2>&1; then
+  ok_
+else
+  fallo "D-5/D-6 reparto y reglas en fabrik_config: $(cat "$tmp/out-rep")"
+fi
 
 # requisitos por CLI incluye pool efectivo y reserva_final (y no el pago excluido)
 FABRIK_CONFIG="$tmp/personal-pool-pack.yaml" run_fabrik config requisitos

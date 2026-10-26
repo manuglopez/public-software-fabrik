@@ -1,0 +1,14 @@
+{
+  "activos": 2,
+  "maximo": 8,
+  "grupos": [
+    {
+      "board": "default",
+      "items": [
+        {"task_id": "t_0000cccc", "titulo": "IMPL-1 tienda: pasarela", "rol": "programador", "modelo": "modelo-rapido", "desde": 1700000060, "llamadas": 59, "herramientas": 71, "worktree": "/codigo/.factory-worktrees/tienda/pagos"},
+        {"task_id": "t_0000dddd", "titulo": "REVISION tienda", "rol": "revisor", "modelo": "modelo-perfil-rev", "desde": 1700000300, "llamadas": null, "herramientas": null}
+      ]
+    },
+    {"board": "tienda", "pausa": {"hasta": null, "aparcadas": 3}, "items": []}
+  ]
+}

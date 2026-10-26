@@ -1,0 +1,7 @@
+{
+  "items": [
+    {"tipo": "plan", "board": "default", "task_id": "t_0000aaaa", "titulo": "PLAN tienda: pagos con tarjeta", "detalle": "Plan esperando tu aprobación", "pregunta": "¿Apruebas el plan de pagos? Responde «adelante»"},
+    {"tipo": "merge", "board": "default", "task_id": "t_0000bbbb", "titulo": "PR-1 tienda: pagos", "detalle": "PR #7 abierto, listo para merge", "pr_url": "https://github.com/acme/tienda/pull/7"},
+    {"tipo": "bloqueada", "board": "default", "task_id": "t_0000eeee", "titulo": "IMPL-2 tienda: falta acceso", "detalle": "capability · Sin credenciales de la pasarela"}
+  ]
+}

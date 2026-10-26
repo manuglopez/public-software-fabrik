@@ -121,17 +121,46 @@ fabrik config ver
 ## 5. Regenerar el portfolio
 
 El portfolio (`~/.hermes/factory/portfolio.yaml`) es el catálogo de repos que usan el orquestador y los tableros.
-Se genera a partir de los `owners` y se **conservan** tus ediciones entre regeneraciones:
+Se genera a partir de los `owners` y se **conservan** tus ediciones entre regeneraciones.
+
+Primero mira qué saldría, sin escribir nada (`--seco` imprime la tabla y un resumen con la org actual y la generada):
+
+```bash
+uv run --with pyyaml python scripts/build_portfolio.py --seco
+```
+
+Y después, la ejecución real:
 
 ```bash
 uv run --with pyyaml python scripts/build_portfolio.py
 ```
+
+Para probar sin tocar el catálogo real, `--salida <ruta>` escribe en otro fichero (y conserva los campos de ese fichero).
+
+Protecciones del script (el destino es `$FABRIK_DATA/portfolio.yaml`):
+
+- **Guarda de org**: si el portfolio existente es de otra `org` que la que ahora se generaría, no lo sobrescribe y sale
+  con código 3. Lo mismo si el fichero no es un YAML legible o si `gh` devuelve 0 proyectos y el catálogo tenía alguno
+  (por ejemplo, `gh` sin sesión). Si de verdad quieres reemplazarlo, añade `--forzar`.
+- **Copias con fecha**: antes de sobrescribir, copia el anterior a `portfolio.yaml.<AAAAMMDD-HHMMSS>.bak` y conserva las
+  5 más recientes. Nunca toca otros ficheros (`portfolio.yaml.bak`, etc.).
 
 ## 6. Activar el Kanban en el escritorio
 
 Abre Hermes Desktop → Capacidades → Plugins → Plugins de escritorio → activa **Kanban**. Los tableros del pack y
 el tuyo aparecen en el selector. Comprueba también que el dispatcher está en marcha (`hermes gateway start` si
 `install.sh` lo avisó).
+
+### El panel The Factory
+
+`install.sh` también monta el panel de mando (plugin `fabrica`, entrada **The Factory** en la barra lateral y en ⌘K):
+
+- Con `node` y `npm` construye `plugin/fabrica/desktop/plugin.js` (`scripts/plugin-desktop.sh build`; `watch` mientras
+  desarrollas y `check` para validarlo). Sin ellos avisa y el resto de la fábrica sigue; instala node y repite `./install.sh`.
+- Enlaza `~/.hermes/plugins/fabrica` al checkout del motor (si ya existe una carpeta con ese nombre que no sea un enlace,
+  no la toca) y lo añade a `plugins.enabled` (`hermes plugins enable fabrica`; reinicia el gateway con
+  `hermes gateway restart`).
+- La mitad de escritorio se activa a mano: Hermes Desktop → Capacidades → Plugins → **The Factory**.
 
 ## 7. Comprobación final
 

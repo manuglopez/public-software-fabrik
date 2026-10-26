@@ -21,6 +21,47 @@ Uso: ./install.sh [--comprobar] [--pack <ruta|url>] [--help]
 EOF
 }
 
+# D-1/D-3: opciones «rápidas» de la unidad de MariaDB (config/systemd/fabrica-mariadb.service).
+OPTS_RAPIDAS="--innodb-buffer-pool-size=2G --innodb-flush-log-at-trx-commit=0 --innodb-doublewrite=0 --innodb-flush-method=O_DIRECT_NO_FSYNC --sync-binlog=0 --innodb-log-file-size=512M --skip-name-resolve"
+
+# D-3: informa (en --comprobar y en modo install) de las opciones rápidas de la unidad efectiva
+# (systemctl --user cat, con drop-ins) y del No_COW (+C) del datadir en btrfs. Solo lee; lo que
+# falta es «av», no «ko»: no rompe la comprobación.
+comprobar_mariadb_rapido() {
+  local mdir="${MDATA:-$HOME/.local/share/fabrica/mariadb}" unidad="" faltan="" o fs
+  if unidad="$(systemctl --user cat fabrica-mariadb 2>/dev/null)"; then
+    faltan=""
+    for o in $OPTS_RAPIDAS; do
+      grep -q -- "$o" <<<"$unidad" || faltan="$faltan $o"
+    done
+    if [[ -z "$faltan" ]]; then
+      ok "fabrica-mariadb lleva las opciones rápidas de tests"
+    else
+      av "fabrica-mariadb sin las opciones rápidas:$faltan"
+      av "migrar con: bash $REPO/scripts/migrar-mariadb-rapido.sh (o --seco para ver qué haría)"
+    fi
+  else
+    av "unidad fabrica-mariadb no instalada en systemd --user (sin --comprobar la instala ./install.sh)"
+  fi
+  if [[ -d "$mdir" ]]; then fs="$(stat -f -c %T "$mdir" 2>/dev/null)"; else fs="$(stat -f -c %T "$(dirname "$mdir")" 2>/dev/null)"; fi
+  case "$fs" in
+    btrfs)
+      if lsattr -d "$mdir" 2>/dev/null | awk '{print $1}' | grep -q 'C'; then
+        ok "datadir con No_COW (+C) en btrfs"
+      else
+        av "datadir $mdir en btrfs sin No_COW (+C): copias de BD más lentas por COW"
+        av "migrar con: bash $REPO/scripts/migrar-mariadb-rapido.sh (o --seco para ver qué haría)"
+      fi
+      ;;
+    "" | desconocido)
+      av "no se pudo saber el sistema de ficheros del datadir $mdir"
+      ;;
+    *)
+      ok "datadir en $fs (sin COW: nada que hacer)"
+      ;;
+  esac
+}
+
 COMPROBAR=0
 PACK_ARG=""
 while [[ $# -gt 0 ]]; do
@@ -172,6 +213,8 @@ if ! ERRORES_POOL="$(uv run --with pyyaml python "$REPO/scripts/fabrik_config.py
   exit 3
 fi
 ok "configuración de modelos válida"
+echo "== MariaDB de la fábrica (rápido)"
+comprobar_mariadb_rapido
 if [[ $COMPROBAR -eq 1 ]]; then
   # Solo comprueba que el SOUL del orquestador se genera (con el pool del pack activo); no escribe nada.
   if SOUL_OUT="$(uv run --with pyyaml python "$REPO/scripts/apply_profile_policy.py" --seco --solo-soul orquestador 2>&1)"; then
@@ -193,6 +236,9 @@ uv run --with pyyaml python "$REPO/scripts/apply_profile_policy.py" | sed 's/^/ 
 S="$REPO/plugin/fabrica/skills/fabrica"
 mkdir -p "$HOME/.hermes/skills/devops" "$HOME/.hermes/profiles/orquestador/skills/devops"
 ln -sfn "$S" "$HOME/.hermes/skills/devops/fabrica"; ln -sfn "$S" "$HOME/.hermes/profiles/orquestador/skills/devops/fabrica"; ok "skill /fabrica"
+
+echo "== Panel The Factory (plugin de escritorio)"
+bash "$REPO/scripts/instalar-panel.sh"
 
 echo "== Kanban"
 hermes config set kanban.orchestrator_profile orquestador >/dev/null
@@ -243,6 +289,13 @@ SQL
     # Primera vez: inicializa el directorio de datos con el usuario fx ya creado (sin contraseña de root, sin sudo).
     if [[ ! -d "$MDATA/mysql" ]]; then
       mkdir -p "$MDATA"
+      # D-2: en btrfs el datadir se crea VACÍO con No_COW (+C) antes de mariadb-install-db: los
+      # ficheros nuevos heredan el atributo y las copias/purgas de BD se salta el COW. Si chattr
+      # falla se sigue sin No_COW (más lento, pero funciona).
+      if [[ "$(stat -f -c %T "$(dirname "$MDATA")" 2>/dev/null)" == btrfs ]]; then
+        chattr +C "$MDATA" 2>/dev/null && ok "datadir con No_COW (+C)" \
+          || av "no se pudo aplicar chattr +C a $MDATA: se sigue sin No_COW"
+      fi
       EXTRA="$(umask 077; mktemp "${TMPDIR:-/tmp}/fabrica-mariadb-init.XXXXXX")"
       cat > "$EXTRA" <<SQL
 CREATE USER IF NOT EXISTS 'fx'@'localhost' IDENTIFIED BY '$FX_DB_PASSWORD';
@@ -253,6 +306,12 @@ SQL
       if mariadb-install-db --no-defaults --datadir="$MDATA" --skip-test-db --auth-root-authentication-method=socket \
            --extra-file="$EXTRA" >/dev/null 2>&1; then ok "MariaDB de la fábrica inicializado en $MDATA"; else ko "no se pudo inicializar el MariaDB de la fábrica en $MDATA"; fi
       rm -f "$EXTRA"
+    fi
+    # D-5: una instalación existente con datadir sin +C NO se migra sola desde install.sh
+    # (llevaría un stop de la BD): solo se avisa y se apunta al migrador.
+    if [[ -d "$MDATA/mysql" && "$(stat -f -c %T "$MDATA" 2>/dev/null)" == btrfs ]] \
+       && ! lsattr -d "$MDATA" 2>/dev/null | awk '{print $1}' | grep -q 'C'; then
+      av "datadir $MDATA sin No_COW (+C): scripts/migrar-mariadb-rapido.sh lo migra (con --seco para simular)"
     fi
     mkdir -p "$HOME/.config/systemd/user"
     sed "s#^ExecStart=[^ ]*mariadbd #ExecStart=$(command -v mariadbd) #" "$REPO/config/systemd/fabrica-mariadb.service" \

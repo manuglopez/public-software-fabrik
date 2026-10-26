@@ -1,0 +1,4 @@
+{"board": "demo", "task": "t_prog", "rol": "programador", "ruta": "sonnet", "modelo": "claude-sonnet-5-5", "proveedor": "claude-subscription-directsdk-experimental", "cuenta": "b", "evitar": [], "titulo": "IMPL nueva"}
+{"board": "demo", "task": "t_impl", "rol": "tester", "ruta": "kimi", "modelo": "kimi-for-coding", "proveedor": "kimi-coding", "cuenta": null, "evitar": ["opus"], "titulo": "IMPL que revisa el tester"}
+{"board": "demo", "task": "t_cierre", "rol": "revisor", "ruta": "opus", "modelo": "claude-opus-5-5", "proveedor": "claude-subscription-directsdk-experimental", "cuenta": "b", "evitar": ["kimi"], "titulo": "CIERRE-LOCAL"}
+{"board": "demo", "task": "t_docs", "rol": "docs", "ruta": "gemini-high", "modelo": "gemini-3.8-flash-high", "proveedor": "antigravity-oauth", "cuenta": null, "evitar": [], "titulo": "DOCS"}

@@ -1,0 +1,13 @@
+cuenta a: semanal 93 % · renueva en 12 h · margen/hora 0,33
+cuenta b: semanal 30 % · renueva en 96 h · margen/hora 0,70
+fable@a            ✅ claude_5h@a 40%; fable_sem@a 10%, se renueva en 12 h (úsalo o piérdelo)
+fable@b            ⛔ sin dato fable_sem@b
+opus@a             ✅ claude_5h@a 40%; claude_sem@a 93%, se renueva en 12 h (úsalo o piérdelo)
+opus@b             ✅ claude_5h@b 20%; claude_sem@b 30% (ritmo ≤68%)
+sonnet@a           ✅ claude_5h@a 40%; claude_sem@a 93%, se renueva en 12 h (úsalo o piérdelo)
+sonnet@b           ✅ claude_5h@b 20%; claude_sem@b 30% (ritmo ≤68%)
+agy-opus           ⛔ agy_claude_5h 95% ≥ tope 92%
+agy-sonnet         ⛔ agy_claude_5h 95% ≥ tope 92%
+kimi               ✅ kimi_5h 10%; kimi_7d 50% (ritmo ≤75%)
+gemini-high        ⛔ gemini_5h 20%; gemini_sem 80% (ritmo ≤36%)
+gemini-med         ⛔ gemini_5h 20%; gemini_sem 80% (ritmo ≤36%)

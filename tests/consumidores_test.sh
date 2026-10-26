@@ -18,7 +18,8 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 export HOME="$tmp/home"
 mkdir -p "$HOME"
-unset FABRIK_CONFIG
+# FABRIK_DATA (lo exporta la shell de los agentes) apuntaría al portfolio real: aislado dentro del HOME temporal.
+unset FABRIK_CONFIG FABRIK_DATA
 
 BIN="$tmp/bin"
 mkdir -p "$BIN"
@@ -155,6 +156,8 @@ else
   ok_
 fi
 
+# El caso anterior dejó un portfolio de acme-org: es de otra org y la guarda de build_portfolio no lo pisaría.
+rm -f "$HOME/.hermes/factory/portfolio.yaml"
 : > "$FAKE_LOG"
 env HOME="$HOME" FABRIK_CONFIG="$tmp/personal-ejemplo.yaml" PATH="$BIN:$PATH" \
   uv run --with pyyaml python "$FABRIK_DIR/scripts/build_portfolio.py" >/dev/null 2>&1

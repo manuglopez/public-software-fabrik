@@ -1,0 +1,5 @@
+kanban --board demo set-model t_prog claude-sonnet-5-5 --provider claude-subscription-directsdk-experimental
+-p programador config set plugins.entries.claude-subscription-directsdk-experimental.settings.claude_config_dir ~/.config/fabrica/claude-b
+kanban --board demo set-model t_impl kimi-for-coding --provider kimi-coding
+kanban --board demo set-model t_cierre claude-opus-5-5 --provider claude-subscription-directsdk-experimental
+kanban --board demo set-model t_docs gemini-3.8-flash-high --provider antigravity-oauth

@@ -15,7 +15,7 @@ FX_WT="${FX_WT:-$HOME/Code/.factory-worktrees}"
 DIAS="${FX_GC_DIAS:-7}"; SECO=0; [[ "${1:-}" == "--seco" ]] && SECO=1
 DBENV="$HOME/.config/fabrica/db.env"; . "$DBENV"
 export GH_CONFIG_DIR="${GH_CONFIG_DIR:-$HOME/.config/gh}"
-FABRIK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+FABRIK_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"  # ruta real: se llama por enlace
 cfg() { uv run --with pyyaml python "$FABRIK_DIR/scripts/fabrik_config.py" "$@" || true; }
 # owner por defecto: FX_ORG > primer `owners` de la config (el remoto del worktree manda si está)
 ORG="${FX_ORG:-$(cfg get owners | head -1)}"

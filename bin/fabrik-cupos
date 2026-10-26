@@ -4,6 +4,7 @@
   fabrik-cupos registrar                         foto ahora (lo lanza el timer fabrica-cupos cada 10 min) → ~/.hermes/factory/logs/cupos.jsonl
   fabrik-cupos                                   informe: % usado ahora y tokens por cada 1 % (→ estimación del total de cada bolsa)
   fabrik-cupos rate-limited [--dias N] [--json]  métrica de rate_limited y esperas por día y tablero
+  fabrik-cupos semana [--dias N] [--json] [--sin-gh]  coste, rondas, rate_limited y Greptile por tablero (scripts/metrica_semanal.py)
 
 Bolsas: Kimi (5 h y 7 d, API /usages), Google Antigravity (Gemini 5 h/semanal, «Claude y GPT» 5 h/semanal,
 Gemini 4 Argon semanal; `agy -p /quota`), OpenAI ChatGPT (bolsa de 30 días; sondeo de Hermes).
@@ -13,6 +14,10 @@ una cota inferior de lo que da cada bolsa.
 """
 import argparse, glob, json, os, re, sqlite3, subprocess, sys, time, urllib.request
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "scripts"))
+from fabrik_config import PROVEEDOR_CLAUDE  # noqa: E402  (nombre del proveedor Claude: default de config)
 
 H = os.path.expanduser("~")
 LOG = f"{H}/.hermes/factory/logs/cupos.jsonl"
@@ -28,7 +33,7 @@ FAMILIAS = {
 # bolsa → familia de tokens que la consume
 BOLSA_FAMILIA = {"kimi_5h": "kimi", "kimi_7d": "kimi", "gemini_5h": "gemini", "gemini_sem": "gemini",
                  "agy_claude_5h": "agy-claude", "agy_claude_sem": "agy-claude", "argon_sem": "argon",
-                 "openai_30d": "openai", "claude_5h": "claude", "claude_sem": "claude"}
+                 "openai_30d": "openai", "claude_5h": "claude", "claude_sem": "claude", "fable_sem": "claude"}
 
 
 def env(k):
@@ -73,18 +78,79 @@ def openai():
     return {"openai_30d": (float(pct), datetime.fromtimestamp(reset, timezone.utc).isoformat())}
 
 
-def anthropic():
-    py = sorted(glob.glob(f"{H}/.hermes/installs/*/environments/*/venv/bin/python"))[0]
-    code = ("from agent.account_usage import fetch_account_usage as f; import json; r=f('anthropic');"
-            "print(json.dumps([[w.label, w.used_percent, str(w.reset_at)] for w in r.windows]))")
-    out = subprocess.run([py, "-c", code], capture_output=True, text=True, timeout=60,
-                         cwd=f"{H}/.hermes/hermes-agent",
-                         env={**os.environ, "PYTHONPATH": f"{H}/.hermes/hermes-agent"}).stdout.strip().splitlines()
+def cuentas_claude():
+    """Cuentas de Claude de la fábrica: ~/.config/fabrica/claude-<nombre> (cada una con su login)."""
+    return {os.path.basename(d)[len("claude-"):]: d for d in sorted(glob.glob(f"{H}/.config/fabrica/claude-*"))
+            if os.path.isdir(d) and os.path.exists(f"{d}/.credentials.json") or os.path.exists(f"{d}/.claude.json")}
+
+
+def ahora():
+    return datetime.now().astimezone()
+
+
+USO_LINEA = re.compile(r"Current (session|week \(all models\)|week \(Fable\)):\s*(\d+(?:\.\d+)?)%\s*used"
+                       r"(?:\s*·\s*resets\s+([A-Za-z]{3})[a-z]*\s+(\d{1,2}),\s*(\d{1,2})(?::(\d{2}))?\s*([ap]m)"
+                       r"(?:\s*\(([^)]+)\))?)?", re.I)
+USO_BOLSA = {"session": "claude_5h", "week (all models)": "claude_sem", "week (fable)": "fable_sem"}
+MESES = {m: i for i, m in enumerate(("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"), 1)}
+
+
+def parsear_usage(texto, hoy=None):
+    """Salida de `claude -p /usage` → {bolsa: (pct, reset ISO con zona)}. Tolera líneas ausentes; sin cifras → {}.
+    El reset no trae año: se toma la próxima aparición de esa fecha y hora (zona del texto; sin zona, la de `hoy`)."""
+    hoy = hoy or ahora()
     res = {}
-    for label, pct, reset in json.loads(out[-1]):
-        k = "claude_5h" if "session" in label.lower() else "claude_sem" if label.lower() == "current week" else None
-        if k:
-            res[k] = (float(pct), reset)
+    for m in USO_LINEA.finditer(texto or ""):
+        bolsa = USO_BOLSA[m.group(1).lower()]
+        reset = ""
+        if m.group(3) and m.group(3).lower() in MESES:
+            try:
+                tz = ZoneInfo(m.group(8)) if m.group(8) else None
+            except (ZoneInfoNotFoundError, ValueError):
+                tz = None
+            ref = hoy.astimezone(tz) if tz else hoy
+            h = int(m.group(5)) % 12 + (12 if m.group(7).lower() == "pm" else 0)
+            for anio in range(ref.year, ref.year + 5):  # 5 años: cubre un 29 de febrero
+                try:
+                    r = datetime(anio, MESES[m.group(3).lower()], int(m.group(4)), h, int(m.group(6) or 0), tzinfo=ref.tzinfo)
+                except ValueError:  # p. ej. 29 de febrero de un año no bisiesto
+                    continue
+                if r >= ref:
+                    reset = r.isoformat()
+                    break
+        res[bolsa] = (float(m.group(2)), reset)
+    return res
+
+
+def anthropic(errores=None):
+    """Mide cada cuenta Claude con `claude -p "/usage"` y su CLAUDE_CONFIG_DIR. Sin lectura ciega: si el
+    directorio no existe o no sale ninguna línea, esa cuenta va a errores["anthropic"][cuenta] y no tiene claves."""
+    errores = {} if errores is None else errores
+    res, fallos = {}, {}
+    for nombre, d in cuentas_claude().items():
+        try:
+            p = subprocess.run(["claude", "-p", "/usage"], capture_output=True, text=True, timeout=120,
+                               cwd=os.path.dirname(LOG) if os.path.isdir(os.path.dirname(LOG)) else None,
+                               env={**os.environ, "CLAUDE_CONFIG_DIR": d})
+        except (OSError, subprocess.SubprocessError) as e:
+            fallos[nombre] = f"{type(e).__name__}: {str(e)[:100]}"
+            continue
+        uso = parsear_usage(p.stdout) if p.returncode == 0 else {}
+        if not uso:
+            fallos[nombre] = f"exit {p.returncode}" if p.returncode else "salida sin cifras de uso"
+        for bolsa, v in uso.items():
+            res[f"{bolsa}@{nombre}"] = v
+    if fallos:
+        errores["anthropic"] = fallos
+    # lectura ciega: dos cuentas con 5 h y semanal idénticos (porcentaje y reset) → se avisa, sin agrupar
+    iguales = {}
+    for nombre in sorted({k.split("@", 1)[1] for k in res}):
+        huella = (res.get(f"claude_5h@{nombre}"), res.get(f"claude_sem@{nombre}"))
+        if all(huella):
+            iguales.setdefault(huella, []).append(nombre)
+    grupos = [" y ".join(g) for g in iguales.values() if len(g) > 1]
+    if grupos:
+        errores["anthropic_sospecha"] = "posible lectura ciega: " + "; ".join(grupos) + " devuelven cifras idénticas"
     return res
 
 
@@ -106,7 +172,8 @@ def tokens():
 
 def registrar():
     foto = {"t": time.time(), "bolsas": {}, "tokens": tokens(), "errores": {}}
-    for nombre, fn in (("kimi", kimi), ("google", google), ("openai", openai), ("anthropic", anthropic)):
+    for nombre, fn in (("kimi", kimi), ("google", google), ("openai", openai),
+                       ("anthropic", lambda: anthropic(foto["errores"]))):
         try:
             foto["bolsas"].update(fn())
         except Exception as e:  # una fuente caída no impide registrar las demás
@@ -119,6 +186,7 @@ def registrar():
 
 
 # Aviso al privado (una vez por bolsa y umbral) cuando una bolsa pasa del umbral.
+# Sin `@`: valen para cualquier <bolsa>@<cuenta> (se compara el prefijo antes de `@`).
 UMBRALES = {"openai_30d": [30, 50, 75], "claude_sem": [85, 95], "kimi_7d": [75, 90], "gemini_sem": [75, 90], "agy_claude_sem": [75, 90]}
 
 
@@ -128,10 +196,8 @@ def avisar_umbrales(foto):
         est = json.load(open(est_f))
     except (OSError, ValueError):
         est = {}
-    for b, umbrales in UMBRALES.items():
-        if b not in foto["bolsas"]:
-            continue
-        pct, reset = foto["bolsas"][b]
+    for b, (pct, reset) in foto["bolsas"].items():
+        umbrales = UMBRALES.get(b.split("@")[0], [])
         for u in umbrales:
             clave = f"{b}:{u}:{reset[:10]}"
             if pct >= u and clave not in est:
@@ -150,7 +216,7 @@ def informe():
     print(f"Última foto: {datetime.fromtimestamp(ult['t']):%d/%m %H:%M} · {len(fotos)} fotos")
     print(f"{'bolsa':16} {'usado':>6}  {'renueva':16} {'tokens por 1 %':>16}  {'≈ bolsa entera':>15}")
     for b, (pct, reset) in sorted(ult["bolsas"].items()):
-        fam = BOLSA_FAMILIA.get(b)
+        fam = BOLSA_FAMILIA.get(b.split("@")[0], "claude" if "@" in b else None)
         # tramos consecutivos dentro de la misma ventana (mismo reset) en que el % sube
         dt_tok = dt_pct = 0.0
         for a, z in zip(fotos, fotos[1:]):
@@ -172,6 +238,7 @@ def informe():
     print("Tokens = entrada nueva + salida + leída de caché (las suscripciones no dicen cómo pondera cada una).")
     tot_7d, tot_hoy = resumen_rate_limited()
     print(f"rate_limited últimos 7 días: {tot_7d} (hoy {tot_hoy}) · detalle: fabrik-cupos rate-limited")
+    print("métrica semanal: fabrik-cupos semana")
 
 
 def parse_payload_reason(payload):
@@ -317,5 +384,8 @@ if __name__ == "__main__":
             print(rate_limited_json(dias=args.dias))
         else:
             print(rate_limited_tabla(dias=args.dias))
+    elif len(sys.argv) > 1 and sys.argv[1] == "semana":
+        import metrica_semanal  # scripts/ ya está en sys.path
+        sys.exit(metrica_semanal.main(sys.argv[2:]))
     else:
         informe()

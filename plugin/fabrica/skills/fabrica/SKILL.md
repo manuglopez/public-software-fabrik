@@ -3,7 +3,7 @@ name: fabrica
 description: "Use when the user says /fabrica or asks the factory to build, fix or check something. Turns a request into a Kanban plan (C0/F2) for the orchestrator."
 version: 0.1.0
 author: software-fabrik
-license: private
+license: MIT
 metadata:
   hermes:
     tags: [kanban, factory, orchestration]

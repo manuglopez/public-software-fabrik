@@ -1,0 +1,13 @@
+{
+  "acme/web-tienda": [
+    {"number": 12, "title": "feat: carrito persistente", "url": "https://github.com/acme/web-tienda/pull/12", "headRefName": "agente/carrito"},
+    {"number": 13, "title": "chore: dependabot", "url": "https://github.com/acme/web-tienda/pull/13", "headRefName": "dependabot/npm/x"},
+    {"number": 14, "title": "fix: precio con IVA", "url": "https://github.com/acme/web-tienda/pull/14", "headRefName": "agente/iva"}
+  ],
+  "acme/api-tienda": [],
+  "acme/app-movil": [
+    {"number": 3, "title": "feat: login biométrico", "url": "https://github.com/acme/app-movil/pull/3", "headRefName": "agente/biometria"}
+  ],
+  "acme/blog": [],
+  "acme/wiki": []
+}

@@ -2,9 +2,13 @@
 Description=MariaDB propio de la fábrica (puerto 3307, solo localhost): BD de tests de los agentes, aislada de las del usuario
 [Service]
 Type=notify
-ExecStart=/usr/sbin/mariadbd --no-defaults --datadir=%h/.local/share/fabrica/mariadb --port=3307 --bind-address=127.0.0.1 --socket=%t/fabrica-mariadb.sock --pid-file=%t/fabrica-mariadb.pid --innodb-buffer-pool-size=256M --skip-log-bin --max-connections=200 --max-allowed-packet=64M --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+# BD solo de tests: se tira y se rehace a cada install/purga, así que no lleva durabilidad de
+# producción (innodb_flush_log_at_trx_commit=0, doublewrite y sync_binlog desactivados). Si algún
+# día guarda datos que importen, quita estas opciones. El datadir va con No_COW (+C) en btrfs
+# (lo crea install.sh; lo migra scripts/migrar-mariadb-rapido.sh).
+ExecStart=/usr/sbin/mariadbd --no-defaults --datadir=%h/.local/share/fabrica/mariadb --port=3307 --bind-address=127.0.0.1 --socket=%t/fabrica-mariadb.sock --pid-file=%t/fabrica-mariadb.pid --innodb-buffer-pool-size=2G --skip-log-bin --max-connections=200 --max-allowed-packet=64M --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci --innodb-flush-log-at-trx-commit=0 --innodb-doublewrite=0 --innodb-flush-method=O_DIRECT_NO_FSYNC --sync-binlog=0 --innodb-log-file-size=512M --skip-name-resolve
 Restart=on-failure
-MemoryMax=1500M
+MemoryMax=3G
 Nice=5
 [Install]
 WantedBy=default.target

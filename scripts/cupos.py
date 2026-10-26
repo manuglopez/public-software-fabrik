@@ -6,6 +6,7 @@ Sin dependencias de Hermes. Testeable de forma aislada.
 from __future__ import annotations
 
 import datetime
+import importlib.util
 import json
 import os
 import time
@@ -15,6 +16,7 @@ from typing import Any, Optional
 LOG_DEFAULT = Path.home() / ".hermes/factory/logs/cupos.jsonl"
 PROFILES_DIR_DEFAULT = Path.home() / ".hermes/profiles"
 MAX_EDAD_DEFAULT = 1800
+_REGLAS: Optional[list[dict[str, Any]]] = None  # caché de _reglas_bolsas()
 
 
 def _strip_quotes(val: str) -> str:
@@ -85,18 +87,26 @@ def _cargar_yaml(text: str) -> dict[str, Any]:
     return res_dict
 
 
+def _reglas_bolsas() -> list[dict[str, Any]]:
+    """Reglas proveedor/modelo → bolsas: `BOLSAS_DEFECTO` de scripts/fabrik_config.py (sin PyYAML).
+
+    Se carga por ruta, junto a este fichero: cupos.py se importa de formas distintas (paquete, ruta, plugin)."""
+    global _REGLAS
+    if _REGLAS is None:
+        ruta = Path(__file__).resolve().with_name("fabrik_config.py")
+        spec = importlib.util.spec_from_file_location("fabrik_config_defectos", ruta)
+        assert spec is not None and spec.loader is not None
+        modulo = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(modulo)
+        _REGLAS = modulo.BOLSAS_DEFECTO
+    return _REGLAS
+
+
 def bolsas_de(proveedor: Optional[str], modelo: Optional[str]) -> list[str]:
     """Devuelve la lista de bolsas que consume la pareja (proveedor, modelo).
 
-    Es el único sitio del mapa proveedor/modelo → bolsas.
-    Se aplica la primera regla que case:
-      - kimi-coding/* → kimi_5h, kimi_7d
-      - antigravity-oauth/gemini-4-argon* → argon_sem
-      - antigravity-oauth/gemini-* → gemini_5h, gemini_sem
-      - antigravity-oauth/claude*|gpt-oss* → agy_claude_5h, agy_claude_sem
-      - claude-subscription*/* → claude_5h, claude_sem
-      - openai-codex/* → openai_30d
-      - cualquier otro → []
+    Es el único sitio del mapa proveedor/modelo → bolsas; las reglas (BOLSAS_DEFECTO) viven en
+    scripts/fabrik_config.py. Se aplica la primera regla que case; cualquier otro → [].
     Una bolsa desconocida nunca bloquea.
     """
     p = str(proveedor or "").strip()
@@ -107,22 +117,12 @@ def bolsas_de(proveedor: Optional[str], modelo: Optional[str]) -> list[str]:
         parts = p.split("/", 1)
         p, m = parts[0], parts[1]
 
-    if p.startswith("kimi-coding"):
-        return ["kimi_5h", "kimi_7d"]
-
-    if p == "antigravity-oauth":
-        if m.startswith("gemini-4-argon"):
-            return ["argon_sem"]
-        if m.startswith("gemini-"):
-            return ["gemini_5h", "gemini_sem"]
-        if m.startswith("claude") or m.startswith("gpt-oss"):
-            return ["agy_claude_5h", "agy_claude_sem"]
-
-    if p.startswith("claude-subscription"):
-        return ["claude_5h", "claude_sem"]
-
-    if p.startswith("openai-codex"):
-        return ["openai_30d"]
+    for regla in _reglas_bolsas():
+        casa = p == regla["proveedor"] if regla["casa"] == "igual" else p.startswith(regla["proveedor"])
+        if not casa:
+            continue
+        if regla["modelos"] is None or any(m.startswith(pref) for pref in regla["modelos"]):
+            return list(regla["bolsas"])
 
     return []
 

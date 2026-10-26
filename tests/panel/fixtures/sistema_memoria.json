@@ -1,0 +1,9 @@
+{
+  "disponible": true,
+  "banco": "ejemplo",
+  "documentos": 451,
+  "nodos": 14595,
+  "ultima_entrada": {"id": "tarjeta/t_0000aaaa", "fecha": "2026-10-24T09:56:00+00:00", "fuente": "tarjeta"},
+  "hoy": {"leccion": 5, "tarjeta": 12, "pr": 3, "claude-memory": 1, "rara": 2},
+  "grafo_url": "http://127.0.0.1:9999/banks/ejemplo"
+}

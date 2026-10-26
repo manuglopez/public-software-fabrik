@@ -1,0 +1,17 @@
+{
+  "org": "acme",
+  "projects": [
+    {"name": "api-tienda", "full_name": "acme/api-tienda", "state": "activo", "ritmo": "semanal", "board": "tienda"},
+    {"name": "web-tienda", "full_name": "acme/web-tienda", "state": "activo", "ritmo": "diario", "board": "tienda"},
+    {"name": "app-movil", "full_name": "acme/app-movil", "state": "activo", "product": "movil", "board": "movil"},
+    {"name": "blog", "full_name": "acme/blog", "state": "activo", "board": "otros"},
+    {"name": "demo-vieja", "full_name": "acme/demo-vieja", "state": "abandonado", "board": "otros"},
+    {"name": "ruido", "full_name": "acme/ruido", "state": "ignorar", "board": "otros"},
+    {"name": "cache-replay", "full_name": "acme/cache-replay", "state": "infra", "board": "otros"},
+    {"name": "wiki", "full_name": "acme/wiki", "state": "dormido", "board": "otros"}
+  ],
+  "products": {
+    "tienda": {"board": "tienda", "note": "Tienda online multimarca", "repos": ["api-tienda", "web-tienda", "wiki"]},
+    "movil": {"board": "movil", "note": "Apps móviles", "repos": []}
+  }
+}

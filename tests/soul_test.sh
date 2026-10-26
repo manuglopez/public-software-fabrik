@@ -115,6 +115,113 @@ else
   fallo "AC-7 falta SOUL del tester"
 fi
 
+# ---------- costes-revision: revisión proporcional, auto-chequeo ampliado y Greptile acotado ----------
+orq_soul="$HOME/.hermes/profiles/orquestador/SOUL.md"
+revisor_soul="$HOME/.hermes/profiles/revisor/SOUL.md"
+C0="$FABRIK_DIR/docs/flows/C0-ciclo-tarjeta-codigo.md"
+LISTA_COMPLETA='lógica de dominio o backend (PHP, Python, bash o JS con decisiones), seguridad y auth, pagos y facturación, migraciones y BD, tenancy y RBAC, contratos de API, despliegue y config de producción, y cualquier tarjeta M o L'
+tiene() { # $1 fichero, $2 frase literal, $3 mensaje de fallo
+  if [ -s "$1" ] && grep -qF -- "$2" "$1"; then bien; else fallo "$3"; fi
+}
+no_tiene() { # $1 fichero, $2 frase literal, $3 mensaje de fallo
+  if [ -s "$1" ] && ! grep -qF -- "$2" "$1"; then bien; else fallo "$3"; fi
+}
+
+# AC-1: revisión proporcional (C0 + tester + programador + orquestador)
+tiene "$C0" '## Revisión proporcional' "AC-1 C0: falta la sección «Revisión proporcional»"
+tiene "$C0" '`Revisión: ligera` o `Revisión: completa`' "AC-1 C0: falta la línea Revisión: ligera|completa"
+tiene "$C0" '**Sin marca = completa.**' "AC-1 C0: falta «sin marca = completa»"
+tiene "$C0" '**3 semillas** aleatorias' "AC-1 C0: la ligera debe pedir 3 semillas"
+tiene "$C0" '**No se hace**: mutantes ni umbral de cobertura del 98 %' "AC-1 C0: la ligera no debe pedir mutantes ni 98 %"
+tiene "$C0" "**Siempre llevan la completa** (aunque vengan marcadas ligera): $LISTA_COMPLETA" "AC-1 C0: falta la lista de tipos que siempre llevan la completa"
+tiene "$C0" '**escala a completa** y lo anota en `findings`, sin `kanban_request_changes` solo por eso' "AC-1 C0: falta el escalado del tester"
+tiene "$C0" 'aplica «Revisión proporcional»' "AC-1 C0: la tabla de tarjetas no remite a «Revisión proporcional» en la fila del tester"
+tiene "$C0" 'Primero lee la línea `Revisión:` de la tarjeta' "AC-1 C0: el checklist del tester no remite a la línea Revisión"
+tiene "$C0" 'metadata = {revision, flake_runs' "AC-1 C0: el veredicto del tester no lleva metadata.revision"
+tiene "$C0" 'Para ver si funciona: `fabrik-cupos semana`' "AC-1 C0: falta la línea D4 «Para ver si funciona: fabrik-cupos semana»"
+for rol in tester programador orquestador; do
+  s="$HOME/.hermes/profiles/$rol/SOUL.md"
+  tiene "$s" 'Revisión: ligera' "AC-1 $rol: el SOUL no menciona la línea Revisión: ligera"
+  tiene "$s" 'Revisión: completa' "AC-1 $rol: el SOUL no menciona la línea Revisión: completa"
+  tiene "$s" 'cualquier tarjeta M o L' "AC-1 $rol: el SOUL no cierra la lista de tipos siempre completa"
+done
+tiene "$HOME/.hermes/profiles/tester/SOUL.md" "**Siempre completa**: $LISTA_COMPLETA" "AC-1 tester: falta la lista de tipos siempre completa"
+tiene "$prog_soul" "**Siempre completa**: $LISTA_COMPLETA" "AC-1 programador: falta la lista de tipos siempre completa"
+tiene "$orq_soul" "**Siempre \`Revisión: completa\`**: $LISTA_COMPLETA" "AC-1 orquestador: falta la lista de tipos siempre completa"
+tiene "$HOME/.hermes/profiles/tester/SOUL.md" '**3 semillas** aleatorias' "AC-1 tester: la ligera debe pedir 3 semillas"
+tiene "$HOME/.hermes/profiles/tester/SOUL.md" '**Sin mutantes ni umbral de cobertura del 98 %**' "AC-1 tester: la ligera no debe pedir mutantes ni 98 %"
+tiene "$HOME/.hermes/profiles/tester/SOUL.md" '**escala a completa** y anótalo en `findings`, sin `kanban_request_changes` solo por eso' "AC-1 tester: falta el escalado a completa"
+tiene "$HOME/.hermes/profiles/tester/SOUL.md" 'Pon `metadata.revision = "ligera"` o `"completa"` en tu veredicto' "AC-1 tester: falta metadata.revision"
+tiene "$prog_soul" 'sin mutantes ni umbral del 98 %' "AC-1 programador: la ligera no debe pedir mutantes ni 98 %"
+tiene "$orq_soul" '## Marca de revisión en cada IMPL/FIX (obligatoria)' "AC-1 orquestador: no obliga a marcar Revisión en cada IMPL/FIX"
+tiene "$orq_soul" 'Si dudas entre las dos, marca `completa`.' "AC-1 orquestador: falta el desempate hacia completa"
+tiene "$orq_soul" 'y la línea `Revisión:`' "AC-1 orquestador: el plan de tarjetas no incluye la línea Revisión"
+
+# AC-2: auto-chequeo ampliado del programador (D2 a, b, c) + porqué
+tiene "$prog_soul" '**(a) Mutar condiciones, constantes y límites**' "AC-2 programador: falta (a) mutar condiciones, constantes y límites"
+tiene "$prog_soul" 'justo en el límite (p. ej. 97/98/99 para un umbral de 98) y de null/ausente' "AC-2 programador: (a) sin casos límite ni null"
+tiene "$prog_soul" '**(b) Ramas de error y de null**' "AC-2 programador: falta (b) ramas de error y de null"
+tiene "$prog_soul" '`catch`/`except`/`||`/`??`/fallo de un comando externo' "AC-2 programador: (b) sin el inventario de ramas"
+tiene "$prog_soul" '**(c) Handoff verificable**' "AC-2 programador: falta (c) handoff verificable"
+tiene "$prog_soul" '`metadata.commit` = `git rev-parse HEAD`' "AC-2 programador: (c) sin commit verificable"
+tiene "$prog_soul" 'relanzado **después del último commit**' "AC-2 programador: (c) sin relanzar tras el último commit"
+tiene "$prog_soul" 'tests que no protegen, ramas de error sin cubrir y handoff no verificable' "AC-2 programador: falta el porqué del auto-chequeo"
+tiene "$C0" '(a) cada condición, constante y valor límite del diff mutada' "AC-2 C0: la fila IMPL no lleva (a)"
+tiene "$C0" '(b) inventario de ramas de error y de null con su test' "AC-2 C0: la fila IMPL no lleva (b)"
+tiene "$C0" '(c) handoff verificable' "AC-2 C0: la fila IMPL no lleva (c)"
+tiene "$C0" 'tests que no protegen, ramas de error sin cubrir y handoff no verificable' "AC-2 C0: la fila IMPL no lleva el porqué"
+
+# AC-5: Greptile acotado (solo factory-greptile, una vez; rondas del PR con el de GitHub)
+tiene "$C0" 'solo con `factory-greptile -b <base> [--agent …]`' "AC-5 C0: falta «solo con factory-greptile»"
+tiene "$C0" '**con los tests ya en verde y tras `/code-review`**' "AC-5 C0: falta tests en verde y tras /code-review"
+tiene "$C0" '**no** se pasa el CLI local entre pushes' "AC-5 C0: falta la regla de no CLI local entre pushes"
+tiene "$C0" '**sin pasar el CLI local entre pushes**' "AC-5 C0: la fila PR no prohíbe el CLI local entre pushes"
+for f in "$prog_soul" "$revisor_soul" "$orq_soul"; do
+  no_tiene "$f" 'greptile review' "AC-5 ${f##*/}: queda una instrucción «greptile review» directa"
+done
+# C0 es el único sitio que explica que `greptile review` pasa por el envoltorio y equivale a factory-greptile
+tiene "$C0" '`greptile review …` equivale a `factory-greptile …`' "AC-5 C0: falta la equivalencia greptile review = factory-greptile"
+for f in "$C0" "$prog_soul" "$revisor_soul" "$orq_soul"; do
+  no_tiene "$f" 'pasando antes' "AC-5 ${f##*/}: queda «pasando antes» el CLI local"
+  no_tiene "$f" 'Greptile CLI local' "AC-5 ${f##*/}: queda «Greptile CLI local»"
+done
+tiene "$prog_soul" 'Greptile local **una sola vez** con `factory-greptile -b develop --agent`' "AC-5 programador: CIERRE-LOCAL sin factory-greptile una sola vez"
+tiene "$prog_soul" 'con los tests ya en verde y tras `/code-review`' "AC-5 programador: CIERRE-LOCAL sin tests en verde ni /code-review"
+tiene "$prog_soul" 'nunca se lanza el binario `greptile` directamente' "AC-5 programador: falta prohibir el binario directo"
+tiene "$prog_soul" 'cada ronda la comprueba el Greptile de GitHub (ya se ejecuta en cada push), **sin pasar el CLI local entre pushes**' "AC-5 programador: PR sin rondas con el Greptile de GitHub"
+tiene "$revisor_soul" 'solo se lanza con `factory-greptile`, una vez por rama, con los tests en verde y tras `/code-review`' "AC-5 revisor: falta Greptile solo con factory-greptile y una vez"
+tiene "$revisor_soul" 'sin CLI local entre pushes' "AC-5 revisor: faltan las rondas del PR con el Greptile de GitHub"
+tiene "$orq_soul" 'Greptile 5/5 (el de GitHub, no el CLI local)' "AC-5 orquestador: «Cierre de feature» sin Greptile 5/5 de GitHub"
+tiene "$orq_soul" 'Greptile local una sola vez con `factory-greptile` (el 5/5 es el Greptile de GitHub, en el PR)' "AC-5 orquestador: CIERRE-LOCAL sin factory-greptile ni 5/5 de GitHub"
+
+# AC-F3: Greptile local UNA vez al final de CIERRE-LOCAL (tras /code-review) y, con PR, sin CLI local y un push por ronda
+no_regex() { # $1 fichero, $2 expresión (grep -E), $3 mensaje de fallo
+  if [ -s "$1" ] && ! grep -qE -- "$2" "$1"; then bien; else fallo "$3"; fi
+}
+antes() { # $1 fichero, $2 frase A, $3 frase B, $4 mensaje: en alguna línea, A aparece antes que B
+  if [ -s "$1" ] && awk -v a="$2" -v b="$3" '{ i = index($0, a); j = index($0, b); if (i > 0 && j > 0 && i < j) ok = 1 } END { exit !ok }' "$1"; then bien; else fallo "$4"; fi
+}
+for f in "$C0" "$prog_soul" "$revisor_soul" "$orq_soul"; do
+  n="${f##*/}"
+  no_tiene "$f" 'repitiendo' "AC-F3 $n: queda «repitiendo»"
+  no_regex "$f" 'cada ronda[^.]*Greptile CLI local' "AC-F3 $n: queda «cada ronda … Greptile CLI local»"
+  no_regex "$f" 'pasando antes[^.]*Greptile CLI local' "AC-F3 $n: queda «pasando antes Greptile CLI local»"
+  no_regex "$f" 'hasta (que )?no haya hallazgos|hasta sin hallazgos' "AC-F3 $n: queda «arreglar hasta sin hallazgos»"
+done
+antes "$C0" '`/code-review` sobre el diff completo contra el merge-base; todo commiteado y en verde → Greptile local **una sola vez**' 'sin volver a pasarlo' "AC-F3 C0 tabla: CIERRE-LOCAL no pasa Greptile local una vez tras /code-review y sin repetirlo"
+tiene "$C0" 'todo commiteado y en verde → Greptile local **una sola vez** con **`factory-greptile -b develop --agent`**' "AC-F3 C0 tabla: falta el orden commiteado y en verde → Greptile una vez"
+tiene "$C0" 'arreglar lo accionable **sin volver a pasarlo**' "AC-F3 C0 tabla: falta «sin volver a pasarlo»"
+tiene "$C0" '**sin CLI local**: Greptile revisa solo en GitHub y `/check-pr` lee sus comentarios' "AC-F3 C0 tabla: la fila PR no dice «sin CLI local» y /check-pr"
+tiene "$C0" 'todos en **un push por ronda**' "AC-F3 C0 tabla: la fila PR no pide un push por ronda"
+tiene "$C0" '**Con el PR abierto no se usa el CLI local**' "AC-F3 C0: falta la regla de PR abierto"
+tiene "$C0" '`bin/greptile`' "AC-F3 C0: falta el envoltorio bin/greptile"
+antes "$prog_soul" '`/code-review` sobre el diff completo contra el merge-base · arreglos · todo commiteado y en verde → Greptile local **una sola vez**' 'sin volver a pasarlo' "AC-F3 programador: CIERRE-LOCAL no deja Greptile local tras /code-review, una vez y sin repetir"
+tiene "$prog_soul" 'con `factory-greptile -b develop --agent`' "AC-F3 programador: CIERRE-LOCAL no nombra factory-greptile -b develop --agent"
+tiene "$prog_soul" '→ arregla lo accionable **sin volver a pasarlo**' "AC-F3 programador: falta «sin volver a pasarlo»"
+tiene "$prog_soul" '**sin CLI local**: Greptile revisa en GitHub y lees sus comentarios con `/check-pr`' "AC-F3 programador: el PR no dice «sin CLI local» y /check-pr"
+tiene "$prog_soul" 'todos en un push por ronda' "AC-F3 programador: el PR no pide un push por ronda"
+tiene "$revisor_soul" 'Con el PR abierto no hay CLI local' "AC-F3 revisor: falta «con el PR abierto no hay CLI local»"
+
 # ---------- AC-11 ----------
 if [ "${#DENYLISTS[@]}" -eq 0 ]; then
   echo "aviso: sin denylists externas (packs/*, \$FABRIK_DATA/packs, PACK_DENYLIST): AC-11 solo comprueba el control negativo" >&2

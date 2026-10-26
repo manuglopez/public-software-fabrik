@@ -1,0 +1,6 @@
+{
+  "lecciones": [
+    {"repo": "web-tienda", "fecha": "2026-10-20", "archivo": "2026-10-20-web-b.md", "sintoma": "El build falla en CI", "causa": "Falta la variable X", "solucion": "Declararla en el workflow", "donde": ".github/workflows/ci.yml"},
+    {"repo": "blog", "fecha": "2026-10-01", "archivo": "2026-10-01-blog-a.md", "sintoma": "Imágenes rotas", "causa": "Ruta relativa", "solucion": "Ruta absoluta", "donde": "next.config.js"}
+  ]
+}

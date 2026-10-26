@@ -28,5 +28,16 @@ memoria:
 # Los modelos son personales: cada usuario pone roles, `pool` y `reserva_final` en su ~/.config/fabrica/fabrik.yaml
 # (`install.sh` los propone según los proveedores que detecta). El pack solo puede fijar `permitir_pago`:
 # con false (por defecto) se ignoran las entradas con `coste: pago` del pool y `install.sh` no las propone.
+# `modelos.reparto` (incluido `aviso_bolsa`, el % de una bolsa que dispara el aviso) tampoco va en el pack: es personal.
 modelos:
   permitir_pago: false
+# Tests (bin/factory-test): los repos cuya suite completa o paralela debe esperar el turno único de la máquina.
+# Los demás repos, y cualquier test dirigido (--filter, --group, ruta de tests), van sin turno. Sin esta lista,
+# todos los repos son pesados. La env FX_TEST_REPOS_PESADOS (separada por espacios) manda sobre ella.
+# tests:
+#   repos_pesados:
+#     - api-acme
+#     - acme-web
+#   dirigidos: 4     # máx. de dirigidos a la vez en la máquina (FX_TEST_DIRIGIDOS manda; def. 4)
+#   repos_token:     # repos con BD de tests fija: sus dirigidos usan TEST_TOKEN=100+hueco (FX_TEST_REPOS_TOKEN manda)
+#     - api-acme

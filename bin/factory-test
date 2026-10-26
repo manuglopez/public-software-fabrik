@@ -1,62 +1,652 @@
 #!/usr/bin/env bash
 # factory-test — turno único de suites de tests en toda la máquina (agentes Y sesiones del usuario).
 #
-#   factory-test [--etiqueta TXT] [--] <comando...>   ejecuta el comando con el turno cogido
-#   factory-test estado                                quién tiene el turno y desde cuándo
+#   factory-test [--etiqueta TXT] [--] <comando...>   ejecuta el comando con el turno/hueco que le toque
+#   factory-test estado                                el pesado, quién espera con prioridad, los dirigidos y los ligeros
 #
-# - Espera su turno (flock). Muestra quién lo tiene mientras espera. Máx. espera FX_TEST_WAIT (s, def. 7200).
+# - Cuatro clases (se elige sola; el primer mensaje dice cuál ha salido y por qué; ante la duda, pesado):
+#   · ligero: un comando bash/node/python… sin tokens de PHP/BD/npm (ver es_ligero). Sin turno ni lock de BD: un
+#     hueco de $FABRIK_DATA/locks/ligeros.d/ (máx. FX_TEST_LIGEROS a la vez, def. 3). FX_TEST_PESADO=1 lo fuerza a
+#     pesado (úsalo si tu script lanza PHP por dentro); FX_TEST_LIGERO=1 a ligero; con los dos gana PESADO.
+#   · dirigido: un runner (phpunit, pest, artisan test, jest, vitest, pytest) con selector (--filter, --group o una
+#     ruta de tests), un phpunit-replay normal (su `run --dry-run` previo no lo degrada a suite completa) y, en un
+#     repo que no sea pesado, cualquier cosa. Sin turno único: un hueco de locks/dirigidos.d/ (máx.
+#     FX_TEST_DIRIGIDOS, def. 4; también `tests.dirigidos` de la config; la env manda).
+#   · replay: un phpunit-replay normal y PARALELO (-p N con N>1, ya rebajado por el tope) de un repo de la lista
+#     FX_TEST_REPOS_REPLAY (aunque esté vacía; si no existe, `tests.replay_simultaneo` de la config; sin lista,
+#     ningún repo), con .factory/env y DB_DATABASE, y cuyo dry-run no lo degrada. Hueco de replay en
+#     locks/replay.d/<n>.lock (n = 1..H, globales a la máquina; H = FX_TEST_REPLAY_HUECOS > tests.replay_huecos
+#     > 2; un valor que no sea un entero ≥ 1 cae a la siguiente fuente). No coge hueco de dirigidos ni el turno
+#     pesado. Exporta siempre FX_TOKEN_OFFSET=(n-1)×N con N el tope de procesos (con el tope por defecto: 0 en el
+#     hueco 1, 4 en el hueco 2), así dos replay del mismo repo y la misma BD base usan rangos de token distintos
+#     (el repo ha de aceptar FX_TOKEN_OFFSET: token de Laravel = TEST_TOKEN + FX_TOKEN_OFFSET). Si quien llama ya
+#     traía otro FX_TOKEN_OFFSET, se sobreescribe y se avisa en una línea. Fuera de esas condiciones todo sigue
+#     como antes: un replay no paralelo, sin .factory/env o de un repo fuera de la lista va como dirigido (lock
+#     de la BD base); un replay degradado va como pesado.
+#   · pesado: la suite completa o paralela (-p N, --parallel, paratest, infection, dusk) de un repo pesado, el replay
+#     degradado, `record`/`--fresh` y lo que no se reconozca. Turno único (flock) con prioridad.
+# - Repos pesados: FX_TEST_REPOS_PESADOS (nombres separados por espacios; vacía = ninguno) o, sin ella, la lista
+#   `tests.repos_pesados` de la config fusionada (scripts/fabrik_config.py). Sin lista: todos son pesados. El nombre
+#   del repo es FX_REPO de .factory/env o, si no, el basename del toplevel de git.
+# - Lock de BD: todo run dirigido o pesado coge, tras el hueco o el turno, un flock en locks/bd.d/<clave>.lock con la
+#   clave DB_HOST:DB_PORT/DB_DATABASE de .factory/env (sin él, el toplevel): dos runs nunca comparten BD.
+# - Token de ParallelTesting (repos con BD de tests fija, p. ej. un guard que solo acepta <base>_test[_test_<n>]):
+#   FX_TEST_REPOS_TOKEN (nombres separados por espacios; vacía = ninguno) o, sin ella, la lista `tests.repos_token`
+#   de la config. En un repo de la lista, un dirigido no paralelo (con .factory/env y sin TEST_TOKEN propio)
+#   exporta LARAVEL_PARALLEL_TESTING=1 y TEST_TOKEN=100+<su hueco de dirigidos>; Laravel crea y migra la BD
+#   <DB_DATABASE>_test_<token> y el lock de BD usa esa clave, así que dos worktrees con la misma BD base van a la vez.
+#   Pesados y paralelos (-p N) no llevan token y bloquean la BD base (que cubre la familia _test_1..N de paratest).
+# - Lock de BD del replay (convivencia con el pesado): el hueco 1 (desfase 0) coge el lock de la BD base, igual
+#   que un dirigido sin token o un pesado (paratest/`artisan test --parallel` usan los tokens 1..N): se excluyen
+#   entre sí sin tocar el turno pesado. El hueco n ≥ 2 coge el lock de `<clave BD>@desfase<k>`, así que no
+#   espera a un pesado de la BD base, que con el tope de N procesos nunca pasa del token N. Límite: si alguien
+#   sube max_procesos mientras hay un replay en el hueco ≥ 2, los rangos se pueden solapar (raro; solo se avisa).
+# - Espera su turno/hueco/BD (flock). Muestra quién lo tiene mientras espera. Máx. espera FX_TEST_WAIT (s, def. 7200).
+# - Prioridad (solo el turno pesado): si el repo (git rev-parse --show-toplevel) casa con una línea de
+#   $FABRIK_DATA/locks/prioridad (subcadena o glob de bash; # comenta) o FX_TEST_PRIO=1, va delante de los que
+#   esperan sin prioridad.
 # - Si el directorio actual (o un padre) tiene .factory/env, lo carga (BD propia del worktree).
 # - Log completo en $FABRIK_DATA/logs/tests/; por pantalla solo resumen (fallos + final), para no
 #   llenar el contexto de los agentes.
 # - Timeout del comando FX_TEST_TIMEOUT (s, def. 2700). Devuelve el exit code del comando.
+# - Pausa de Dusk: si FX_TEST_DUSK_PAUSADO=1 (manda la env; 0/no/false o vacía desactiva), o existe
+#   $CFG_DIR/dusk-pausado (CFG_DIR = dirname de FABRIK_CONFIG o ~/.config/fabrica/fabrik.yaml), o la config
+#   fusionada tiene tests.dusk_pausado: true, factory-test rechaza con exit 3 cualquier comando que ejecute Dusk
+#   (artisan dusk, dusk:, tests/Browser, DuskTestCase, chromedriver, dusk-run — también dentro de los .sh
+#   pasados y de los .sh que éstos llamen, hasta 2 niveles), antes de coger turno, hueco o lock.
+# - Tope de procesos: FX_TEST_MAX_PROCESOS > $CFG_DIR/max-procesos-tests > tests.max_procesos > 4 (un valor que
+#   no sea un entero ≥ 1 se ignora y se pasa a la siguiente fuente). Los -p M/--processes M/--parallel M con M
+#   mayor que el tope se rebajan (también -pM y --processes=M/--parallel=M); un -p/--parallel sin número en
+#   paratest/phpunit-replay recibe el tope, y `artisan test --parallel` sin --processes recibe --processes=N.
+#   La reescritura se aplica antes de clasificar. Límite: no se reescribe nada dentro de strings (bash -c "…")
+#   ni dentro de scripts. `factory-test estado` no se ve afectado.
+#
+# Cómo funciona la prioridad: flock no garantiza orden, así que quien tiene prioridad se apunta en
+# locks/prio.d/<pid> mientras espera (y se borra al coger el turno o al salir). Quien NO tiene prioridad y coge
+# el turno mira prio.d: si hay algún pid vivo, suelta el turno (flock -u), espera FX_TEST_PAUSA s (def. 2) y
+# vuelve a intentarlo, siempre dentro de FX_TEST_WAIT. Los pids muertos (o reutilizados) de prio.d se ignoran y
+# se borran. No se expulsa a quien ya está ejecutando: la prioridad solo ordena la cola. FX_TEST_PRIO=0 la quita.
+#
+# Orden de los locks (así no hay ciclos): hueco (ligero/dirigido/replay) o turno (pesado) → BD. Descriptores: 9
+# turno, 8 hueco (también el de replay), 7 BD. El replay coge hueco y BD sin bloquear (flock -n): si la BD de
+# un hueco está ocupada, suelta el hueco y prueba el siguiente; sin par libre, espera FX_TEST_PAUSA y reintenta. Un dry-run del replay (FX_TEST_DRYRUN_TIMEOUT, def. 60 s) decide si un replay va dirigido o pesado.
+#
+# Actualizarlo: escribir una copia y `mv` encima (git ya lo hace así). Además, todo el cuerpo va dentro de
+# main() y se llama en la última línea, así bash lo ha leído entero antes de ejecutar nada y una edición en
+# caliente no rompe a quien lo esté ejecutando.
 set -uo pipefail
 
 FABRIK_DATA="${FABRIK_DATA:-$HOME/.hermes/factory}"
 LOCKDIR="$FABRIK_DATA/locks"; LOGDIR="$FABRIK_DATA/logs/tests"
 LOCK="$LOCKDIR/factory-test.lock"; OWNER="$LOCKDIR/factory-test.owner"
-mkdir -p "$LOCKDIR" "$LOGDIR"
+PRIOFILE="$LOCKDIR/prioridad"; PRIODIR="$LOCKDIR/prio.d"
+LIGDIR="$LOCKDIR/ligeros.d"; DIRDIR="$LOCKDIR/dirigidos.d"; BDDIR="$LOCKDIR/bd.d"; REPDIR="$LOCKDIR/replay.d"
+PRIO=0; TENGO=0; HUECO=0; HUECODIR=""; BDOWNER=""
+CLASE=""; MOTIVO=""
 
-if [[ "${1:-}" == "estado" ]]; then
-  if flock -n "$LOCK" true 2>/dev/null; then echo "libre"; else echo "ocupado: $(cat "$OWNER" 2>/dev/null)"; fi
-  exit 0
-fi
+# Instante de arranque del proceso <pid> (campo 22 de /proc/<pid>/stat): distingue un pid reutilizado.
+inicio_pid() {
+  local s
+  s="$(cat "/proc/$1/stat" 2>/dev/null)" || return 1
+  s="${s##*) }"   # el nombre del proceso (campo 2) puede llevar espacios: se salta hasta su «)»
+  # shellcheck disable=SC2086
+  set -- $s
+  [[ -n "${20:-}" ]] && printf '%s\n' "${20}"
+}
 
-ETIQ=""
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --etiqueta) ETIQ="$2"; shift 2 ;;
-    --) shift; break ;;
-    *) break ;;
+# ¿La entrada prio.d/<pid> es de un proceso vivo, y del mismo que se apuntó?
+prio_vivo() {
+  local f="$1" pid ini_f ini
+  pid="${f##*/}"
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  kill -0 "$pid" 2>/dev/null || [[ -d "/proc/$pid" ]] || return 1
+  ini_f="$(sed -n 's/^inicio=//p' "$f" 2>/dev/null | head -1)"
+  if [[ -n "$ini_f" ]] && ini="$(inicio_pid "$pid")"; then [[ "$ini" == "$ini_f" ]] || return 1; fi
+  return 0
+}
+
+# Una línea («quién») por cada espera con prioridad viva; borra las entradas de pids muertos.
+prio_en_cola() {
+  local f
+  for f in "$PRIODIR"/*; do
+    [[ -f "$f" ]] || continue
+    if prio_vivo "$f"; then sed -n '/^inicio=/!{p;q}' "$f"; else rm -f "$f"; fi
+  done
+}
+
+# ¿Quien llama tiene prioridad? FX_TEST_PRIO=1/0 manda; si no, el fichero de prioridad contra el toplevel.
+tiene_prio() { # <toplevel>
+  local pat
+  case "${FX_TEST_PRIO:-}" in 1) return 0 ;; 0) return 1 ;; esac
+  [[ -f "$PRIOFILE" ]] || return 1
+  while IFS= read -r pat || [[ -n "$pat" ]]; do
+    pat="${pat%%#*}"
+    pat="${pat#"${pat%%[![:space:]]*}"}"; pat="${pat%"${pat##*[![:space:]]}"}"
+    [[ -z "$pat" ]] && continue
+    # shellcheck disable=SC2053  # el patrón va sin comillas a propósito: admite globs
+    [[ "$1" == *$pat* ]] && return 0
+  done < "$PRIOFILE"
+  return 1
+}
+
+# ---- clasificación (pura: sin tocar locks ni ficheros) ----
+# ¿Comando ligero (sin BD ni suites pesadas), que puede saltarse el turno único? Del lado seguro:
+# solo lo es si su ejecutable (tras `env` y las VAR=val iniciales) está en la lista blanca Y ninguna palabra de
+# TODA la línea (también lo de dentro de `bash -c "…"`) es un token pesado. FX_TEST_PESADO=1 manda sobre FX_TEST_LIGERO=1.
+LIGEROS_OK=" bash sh zsh node shellcheck bats python python3 true false "
+PESADOS_RE='(^|[^[:alnum:]_-])(php|phpunit|paratest|pest|artisan|phpunit-replay|dusk|vitest|jest|playwright|pytest|composer|npm|npx|yarn|pnpm|make|mysql|mariadb|psql)($|[^[:alnum:]_-])'
+es_ligero() {
+  [[ "${FX_TEST_PESADO:-}" == 1 ]] && return 1
+  [[ "${FX_TEST_LIGERO:-}" == 1 ]] && return 0
+  local w ejec=""
+  for w in "$@"; do
+    if [[ "${w##*/}" == env || "$w" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then continue; fi
+    ejec="${w##*/}"; break
+  done
+  [[ -n "$ejec" && "$LIGEROS_OK" == *" $ejec "* ]] || return 1
+  [[ "$*" =~ $PESADOS_RE ]] && return 1
+  return 0
+}
+
+# Opciones sin valor propio: tras ellas, el siguiente argumento sí puede ser una ruta de tests.
+FLAGS_SIN_VALOR=" -v -vv -vvv -q -x -i --verbose --quiet --testdox --colors --debug --bail --dirty --compact --ansi --no-ansi --no-interaction --stop-on-failure --stop-on-error --stop-on-defect --no-coverage --no-progress --no-results --do-not-cache-result --process-isolation --fail-on-warning --fail-on-risky --display-warnings --display-deprecations --runInBand "
+
+# Imprime el selector de los argumentos de un runner (--filter, --group o ruta de tests); rc 1 si no hay.
+# No cuentan `tests`, `./`, `.`, ni --testsuite/--exclude-group solos; una ruta tras una opción de valor desconocido
+# (p. ej. `--log-junit build/x.xml`) tampoco: ante la duda, sin selector.
+selector_de() {
+  local a prev="" t
+  for a in "$@"; do
+    case "$a" in --filter|--filter=*|--group|--group=*) printf '%s\n' "${a%%=*}"; return 0 ;; esac
+    if [[ "$a" != -* ]] && { [[ "$prev" != -* || "$prev" == *=* || "$prev" =~ ^-p[0-9]+$ ]] || [[ "$FLAGS_SIN_VALOR" == *" $prev "* ]]; }; then
+      t="${a#./}"; t="${t%/}"
+      case "$t" in ''|.|test|tests) ;;
+        *) if [[ "$t" == */* || "$t" =~ \.(php|js|jsx|mjs|ts|tsx|py)$ ]]; then printf '%s\n' "$a"; return 0; fi ;;
+      esac
+    fi
+    prev="$a"
+  done
+  return 1
+}
+
+# ¿Paralelo? -p N / -pN / --processes[= ]N con N>1, --parallel, o paratest/infection/dusk como palabra.
+es_paralelo() {
+  local a prev=""
+  for a in "$@"; do
+    case "$a" in
+      --parallel|--parallel=*) return 0 ;;
+      --processes=*) [[ "${a#*=}" =~ ^[0-9]+$ ]] && (( 10#${a#*=} > 1 )) && return 0 ;;
+      -p[0-9]*) [[ "${a#-p}" =~ ^[0-9]+$ ]] && (( 10#${a#-p} > 1 )) && return 0 ;;
+    esac
+    if [[ "$prev" == -p || "$prev" == --processes ]]; then [[ "$a" =~ ^[0-9]+$ ]] && (( 10#$a > 1 )) && return 0; fi
+    prev="$a"
+  done
+  [[ "$*" =~ (^|[^[:alnum:]_-])(paratest|infection|dusk)($|[^[:alnum:]_-]) ]]
+}
+
+# Clasifica un comando: deja CLASE (ligero|dirigido|pesado|replay) y MOTIVO. <repo_pesado>: 1 si el repo es pesado.
+# `replay` = phpunit-replay normal: falta su dry-run (replay_degradado) para saber si es dirigido o pesado.
+clase_de() { # <repo_pesado 1|0> <comando…>
+  local rp="$1" i=0 ej sel x sub=""; shift
+  local -a a=("$@") resto=()
+  CLASE=pesado; MOTIVO="suite completa o comando sin reconocer"
+  if [[ "${FX_TEST_PESADO:-}" == 1 ]]; then MOTIVO="FX_TEST_PESADO=1"; return 0; fi
+  if es_ligero "$@"; then CLASE=ligero; MOTIVO="comando ligero"; [[ "${FX_TEST_LIGERO:-}" == 1 ]] && MOTIVO="FX_TEST_LIGERO=1"; return 0; fi
+  if [[ "$rp" != 1 ]]; then CLASE=dirigido; MOTIVO="repo no pesado"; return 0; fi
+  while [[ "${a[i]:-}" == env || "${a[i]##*/}" == env || "${a[i]:-}" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; do i=$((i + 1)); done
+  [[ "${a[i]##*/}" == php ]] && i=$((i + 1))
+  ej="${a[i]:-}"; ej="${ej##*/}"; resto=("${a[@]:i+1}")
+  if [[ "$ej" == phpunit-replay ]]; then
+    for x in "${resto[@]}"; do if [[ "$x" != -* ]]; then sub="$x"; break; fi; done
+    if [[ "$sub" != run || " ${resto[*]} " == *" --fresh "* ]]; then MOTIVO="phpunit-replay ${sub:-?}/--fresh: suite completa"; return 0; fi
+    CLASE=replay; MOTIVO="phpunit-replay run"; return 0
+  fi
+  if es_paralelo "$@"; then MOTIVO="paralelo"; return 0; fi
+  case "$ej" in
+    phpunit|pest|jest|vitest|pytest) ;;
+    artisan) if [[ "${resto[0]:-}" == test ]]; then resto=("${resto[@]:1}"); else ej=""; fi ;;
+    *) ej="" ;;
   esac
-done
-[[ $# -eq 0 ]] && { sed -n '2,12p' "$0"; exit 2; }
+  if [[ -n "$ej" ]] && sel="$(selector_de "${resto[@]}")"; then CLASE=dirigido; MOTIVO="$sel"; return 0; fi
+  return 0
+}
+# fin clasificación
 
-# BD propia del worktree
-d="$PWD"; while [[ "$d" != "/" ]]; do
-  if [[ -f "$d/.factory/env" ]]; then set -a; . "$d/.factory/env"; set +a; break; fi
-  d="$(dirname "$d")"
-done
+# ¿Es pesado el repo <nombre>? FX_TEST_REPOS_PESADOS (aunque esté vacía) manda; si no, tests.repos_pesados de la
+# config fusionada. Sin lista (clave ausente, uv falla, config inválida) todos son pesados.
+config_get() { # <clave> → valor en stdout; rc≠0 si falta
+  local dir; dir="$(dirname "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")")"
+  timeout 30 uv run --with pyyaml python "$dir/scripts/fabrik_config.py" get "$1" 2>/dev/null
+}
+repo_es_pesado() { # <nombre>
+  local lista r
+  if [[ -n "${FX_TEST_REPOS_PESADOS+x}" ]]; then lista="$FX_TEST_REPOS_PESADOS"; else lista="$(config_get tests.repos_pesados)" || return 0; fi
+  for r in $lista; do [[ "$r" == "$1" ]] && return 0; done
+  return 1
+}
 
-REPO="$(basename "$(git rev-parse --show-toplevel 2>/dev/null || echo "$PWD")")"
-TS="$(date +%Y%m%d-%H%M%S)"; LOG="$LOGDIR/$TS-$REPO.log"
-QUIEN="${HERMES_PROFILE:-${USER}} pid=$$ repo=$REPO ${ETIQ:+[$ETIQ] }cmd=$* desde=$(date +%H:%M:%S)"
+# ¿Usa el repo <nombre> el token de ParallelTesting? FX_TEST_REPOS_TOKEN (aunque esté vacía) manda; si no,
+# tests.repos_token de la config. Sin lista (clave ausente, uv falla) ninguno.
+repo_usa_token() { # <nombre>
+  local lista r
+  if [[ -n "${FX_TEST_REPOS_TOKEN+x}" ]]; then lista="$FX_TEST_REPOS_TOKEN"; else lista="$(config_get tests.repos_token)" || return 1; fi
+  for r in $lista; do [[ "$r" == "$1" ]] && return 0; done
+  return 1
+}
 
-exec 9>"$LOCK"
-if ! flock -n 9; then
-  echo "⏳ esperando turno de tests — lo tiene: $(cat "$OWNER" 2>/dev/null)"
-  flock -w "${FX_TEST_WAIT:-7200}" 9 || { echo "✗ sin turno tras ${FX_TEST_WAIT:-7200}s"; exit 75; }
-fi
-echo "$QUIEN" > "$OWNER"
-trap 'echo "" > "$OWNER"' EXIT
+# ¿Está el repo <nombre> en la lista de replay a la vez? FX_TEST_REPOS_REPLAY (aunque esté vacía) manda; si no,
+# tests.replay_simultaneo de la config. Sin lista (clave ausente, uv falla) ninguno.
+repo_replay_simultaneo() { # <nombre>
+  local lista r
+  if [[ -n "${FX_TEST_REPOS_REPLAY+x}" ]]; then lista="$FX_TEST_REPOS_REPLAY"; else lista="$(config_get tests.replay_simultaneo)" || return 1; fi
+  for r in $lista; do [[ "$r" == "$1" ]] && return 0; done
+  return 1
+}
 
-INI=$(date +%s)
-timeout --kill-after=30 "${FX_TEST_TIMEOUT:-2700}" "$@" >"$LOG" 2>&1
-RC=$?
-DUR=$(( $(date +%s) - INI ))
+# ---- pausa de Dusk (D-2) y tope de procesos (D-3); comportamiento antes en el overlay bin-live ----
+DUSK_RE='(artisan[[:space:]]+dusk|dusk:|tests/Browser|DuskTestCase|chromedriver|dusk-run)'
+CFG_DIR="$(dirname "${FABRIK_CONFIG:-$HOME/.config/fabrica/fabrik.yaml}")"
 
-echo "── factory-test: rc=$RC en ${DUR}s · log: $LOG"
-[[ $RC -eq 124 ]] && echo "✗ TIMEOUT (${FX_TEST_TIMEOUT:-2700}s)"
-# Fallos (máx. 40 líneas) + final del log (25 líneas)
-grep -n -E "^(FAIL|ERROR|✘|  ✘)|^[0-9]+\) |There (was|were) [0-9]+ (failure|error)|Failed asserting|Exception:|FAILURES!|ERRORS!" "$LOG" | head -40
-echo "── final:"; tail -25 "$LOG"
-exit $RC
+# Rutas .sh referenciadas por el script <f>, resueltas contra su directorio (y el cwd): admite $D/, "$D"/
+# y la forma «directorio del propio script» (normalizados a $D antes de extraer los tokens) y rutas relativas
+# desnudas.
+refs_sh_de() { # <script>
+  local f="$1" d
+  d="$(cd "$(dirname "$f")" && pwd)"
+  sed -e 's/\$(dirname "\$0")/\$D/g' -e 's/"\$D"/\$D/g' "$f" \
+    | grep -oE '[^[:space:]"'"'"']+\.sh' \
+    | sed 's#^\$D/##' \
+    | while IFS= read -r r; do
+        if [[ -f "$d/$r" ]]; then printf '%s\n' "$d/$r"
+        elif [[ -f "$r" ]]; then printf '%s\n' "$r"; fi
+      done
+}
+
+# ¿El contenido del script <f> (o el de los .sh que llama, hasta <niveles>) menciona Dusk?
+script_es_dusk() { # <script> <niveles>
+  local f="$1" niveles="$2" s
+  grep -qE "$DUSK_RE" "$f" && return 0
+  (( niveles <= 0 )) && return 1
+  while IFS= read -r s; do
+    script_es_dusk "$s" $((niveles - 1)) && return 0
+  done < <(refs_sh_de "$f")
+  return 1
+}
+
+# ¿El comando (o algún .sh que lanza, hasta 2 niveles) ejecuta Dusk?
+es_dusk() { # <comando…>
+  local a
+  [[ "$*" =~ $DUSK_RE ]] && return 0
+  for a in "$@"; do
+    [[ -f "$a" && "$a" == *.sh ]] || continue
+    script_es_dusk "$a" 1 && return 0
+  done
+  return 1
+}
+
+# Motivo de la pausa de Dusk si está activa (vacío si no lo está): env > fichero dusk-pausado > config.
+dusk_pausado_motivo() {
+  local v
+  if [[ -n "${FX_TEST_DUSK_PAUSADO+x}" ]]; then
+    v="$(printf '%s' "$FX_TEST_DUSK_PAUSADO" | tr '[:upper:]' '[:lower:]')"
+    case "$v" in 1|si|true) printf 'flag dusk-pausado\n' ;; esac
+    return 0
+  fi
+  if [[ -f "$CFG_DIR/dusk-pausado" ]]; then
+    v="$(head -c 200 "$CFG_DIR/dusk-pausado" | tr -d '\r\n')"
+    printf '%s\n' "${v:-dusk-pausado}"
+    return 0
+  fi
+  v="$(config_get tests.dusk_pausado 2>/dev/null)" || v=""
+  [[ "$(printf '%s' "$v" | tr '[:upper:]' '[:lower:]')" == "true" ]] && printf 'config tests.dusk_pausado\n'
+  return 0
+}
+
+# ¿Entero ≥ 1? (validación común de las fuentes del tope de procesos)
+entero_positivo() { [[ "${1:-}" =~ ^[0-9]+$ ]] && (( 10#$1 >= 1 )); }
+
+# Tope de procesos en paralelo (D-3): env > fichero max-procesos-tests > tests.max_procesos > 4.
+# Un valor que no sea un entero ≥ 1 se ignora y se pasa a la siguiente fuente.
+max_procesos() {
+  local v
+  if [[ -n "${FX_TEST_MAX_PROCESOS+x}" ]] && entero_positivo "$FX_TEST_MAX_PROCESOS"; then
+    printf '%s\n' "$FX_TEST_MAX_PROCESOS"; return 0
+  fi
+  if [[ -f "$CFG_DIR/max-procesos-tests" ]]; then
+    v="$(head -n 1 "$CFG_DIR/max-procesos-tests" | tr -d '[:space:]')"
+    entero_positivo "$v" && { printf '%s\n' "$v"; return 0; }
+  fi
+  v="$(config_get tests.max_procesos 2>/dev/null)" || v=""
+  v="$(printf '%s' "$v" | tr -d '[:space:]')"
+  entero_positivo "$v" && { printf '%s\n' "$v"; return 0; }
+  printf '4\n'
+}
+
+# Número de huecos de replay (D-1): FX_TEST_REPLAY_HUECOS > tests.replay_huecos > 2. Un valor que no sea un
+# entero ≥ 1 cae a la siguiente fuente.
+replay_huecos() {
+  local v
+  if [[ -n "${FX_TEST_REPLAY_HUECOS+x}" ]] && entero_positivo "$FX_TEST_REPLAY_HUECOS"; then
+    printf '%s\n' "$((10#$FX_TEST_REPLAY_HUECOS))"; return 0
+  fi
+  v="$(config_get tests.replay_huecos 2>/dev/null)" || v=""
+  v="$(printf '%s' "$v" | tr -d '[:space:]')"
+  entero_positivo "$v" && { printf '%s\n' "$((10#$v))"; return 0; }
+  printf '2\n'
+}
+
+# Reescribe el comando rebajando el paralelismo al tope N. Imprime los args resultantes, uno por línea;
+# rc 0 si cambió algo, 1 si no (misma lógica que el overlay bin-live).
+rebajar_args() { # <N> <comando…>
+  local n="$1" a prev="" hay_proc=0 es_par=0 es_artisan_par=0 cambio=0 i sig
+  shift
+  local -a args=() out=()
+  for a in "$@"; do
+    if [[ "$prev" == "-p" || "$prev" == "--processes" || "$prev" == "--parallel" ]] && [[ "$a" =~ ^[0-9]+$ ]]; then
+      (( 10#$a > n )) && { a="$n"; cambio=1; }
+      hay_proc=1
+    elif [[ "$a" =~ ^-p([0-9]+)$ ]]; then
+      (( 10#${BASH_REMATCH[1]} > n )) && { a="-p$n"; cambio=1; }
+      hay_proc=1
+    elif [[ "$a" =~ ^--(processes|parallel)=([0-9]+)$ ]]; then
+      (( 10#${BASH_REMATCH[2]} > n )) && { a="--${BASH_REMATCH[1]}=$n"; cambio=1; }
+      hay_proc=1
+    fi
+    [[ "$a" == paratest || "$a" == */paratest || "$a" == phpunit-replay || "$a" == */phpunit-replay ]] && es_par=1
+    [[ "$a" == --parallel ]] && es_artisan_par=1
+    args+=("$a"); prev="$a"
+  done
+  # -p / --parallel sin número (autodetección de hilos) en paratest/phpunit-replay: se fija al tope
+  if (( ! hay_proc )); then
+    for ((i = 0; i < ${#args[@]}; i++)); do
+      a="${args[i]}"; sig="${args[i+1]:-}"
+      if [[ "$a" == "-p" || "$a" == "--parallel" ]] && ! [[ "$sig" =~ ^[0-9]+$ ]] && (( es_par )); then
+        out+=("$a" "$n"); cambio=1
+      else
+        out+=("$a")
+      fi
+    done
+    args=("${out[@]}")
+    # `artisan test --parallel` sin ningún --processes/-p numérico recibe --processes=N al final
+    if (( es_artisan_par )); then args+=("--processes=$n"); cambio=1; fi
+  fi
+  printf '%s\n' "${args[@]}"
+  return $((1 - cambio))
+}
+
+# Nombre de fichero de lock para una clave de BD: saneado y, si es larga, recortado con un cksum.
+clave_fichero() { # <clave>
+  local f; f="$(printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_')"
+  (( ${#f} > 120 )) && f="${f:0:100}-$(printf '%s' "$1" | cksum | cut -d' ' -f1)"
+  printf '%s\n' "$f"
+}
+
+# Dry-run del replay antes de lanzarlo: rc 0 si el replay se degradaría a suite completa (o el dry-run falla).
+replay_degradado() { # <comando…>
+  local w found=0 hecho=0 out rc; local -a dry=()
+  for w in "$@"; do
+    dry+=("$w")
+    if (( found && ! hecho )) && [[ "$w" != -* ]]; then dry+=(--dry-run); hecho=1; fi
+    [[ "${w##*/}" == phpunit-replay ]] && found=1
+  done
+  out="$(timeout "${FX_TEST_DRYRUN_TIMEOUT:-60}" env "${dry[@]}" 2>&1 < /dev/null)"; rc=$?
+  if (( rc != 0 )); then MOTIVO="dry-run del replay rc=$rc"; return 0; fi
+  if [[ "$out" =~ (structural\ change|recording\ a\ fresh\ baseline|cannot\ be\ used|would\ record\ the\ full\ suite|would\ run\ the\ full\ suite|degraded) ]]; then
+    MOTIVO="replay degradado a suite completa (${BASH_REMATCH[1]})"; return 0
+  fi
+  return 1
+}
+
+# Cogen un hueco contado <dir>/<n>.lock (n = 1..<max>) en el fd 8. Usan FIN, PAUSA, esperando y sin_turno de main.
+coger_hueco() { # <dir> <max> <clase>
+  local n
+  mkdir -p "$1"
+  while :; do
+    for ((n = 1; n <= $2; n++)); do
+      exec 8>"$1/$n.lock"
+      if flock -n 8; then HUECO=$n; HUECODIR="$1"; return 0; fi
+      exec 8>&-
+    done
+    if [[ $esperando == 0 ]]; then echo "⏳ esperando hueco de tests $3s ($2 en marcha)"; esperando=1; fi
+    (( SECONDS < FIN )) || sin_turno
+    sleep "$PAUSA"
+  done
+}
+
+# Lock de la BD efectiva (fd 7), después del hueco o el turno.
+coger_bd() { # <clave> <fichero> <quien>
+  local resto
+  mkdir -p "$BDDIR"
+  exec 7>"$2.lock"
+  if ! flock -n 7; then
+    echo "⏳ esperando la BD $1 — la usa: $(cat "$2.owner" 2>/dev/null)"
+    resto=$((FIN - SECONDS))
+    (( resto > 0 )) || sin_turno
+    flock -w "$resto" 7 || sin_turno
+  fi
+  echo "$3" > "$2.owner"; BDOWNER="$2.owner"
+}
+
+# Hueco de replay <n> (fd 8) + lock de su BD (fd 7), los dos sin bloquear (hueco → BD): n = 1..<max>; el hueco 1
+# (desfase 0) usa la BD base y el n ≥ 2 la clave <BD>@desfase<k>, con k = (n-1)×<procs>. Si la BD está ocupada,
+# suelta el hueco y prueba el siguiente; sin par libre, avisa una vez, espera PAUSA y reintenta dentro de FIN.
+# Deja HUECO/HUECODIR/BDOWNER (para limpiar_salida), REPLAY_OFFSET y REPLAY_CLAVE. Usan FIN, PAUSA, esperando y
+# sin_turno de main.
+REPLAY_OFFSET=0; REPLAY_CLAVE=""
+coger_replay() { # <max> <procs> <clave BD base> <quien>
+  local n off clave fich
+  mkdir -p "$REPDIR" "$BDDIR"
+  while :; do
+    for ((n = 1; n <= $1; n++)); do
+      exec 8>"$REPDIR/$n.lock"
+      if flock -n 8; then
+        off=$(( (n - 1) * $2 )); clave="$3"
+        (( off > 0 )) && clave="$3@desfase$off"
+        fich="$BDDIR/$(clave_fichero "$clave")"
+        exec 7>"$fich.lock"
+        if flock -n 7; then
+          HUECO=$n; HUECODIR="$REPDIR"; BDOWNER="$fich.owner"
+          REPLAY_OFFSET=$off; REPLAY_CLAVE="$clave"
+          printf '%s\n%s\n%s\n' "$4" "$clave" "$off" > "$REPDIR/$n.owner"
+          echo "$4" > "$BDOWNER"
+          return 0
+        fi
+        exec 7>&-
+      fi
+      exec 8>&-
+    done
+    if [[ $esperando == 0 ]]; then echo "⏳ esperando hueco de replay ($1 en marcha) …"; esperando=1; fi
+    (( SECONDS < FIN )) || sin_turno
+    sleep "$PAUSA"
+  done
+}
+
+# shellcheck disable=SC2329  # se invoca con el trap EXIT de main
+limpiar_salida() {
+  if [[ $PRIO == 1 ]]; then rm -f "$PRIODIR/$$"; fi
+  if [[ $TENGO == 1 ]]; then echo "" > "$OWNER"; fi
+  if [[ $HUECO != 0 ]]; then : > "$HUECODIR/$HUECO.owner"; fi
+  if [[ -n "$BDOWNER" ]]; then : > "$BDOWNER"; fi
+  return 0
+}
+
+main() {
+  mkdir -p "$LOCKDIR" "$LOGDIR"
+
+  if [[ "${1:-}" == "estado" ]]; then
+    if flock -n "$LOCK" true 2>/dev/null; then echo "libre"; else echo "ocupado: $(cat "$OWNER" 2>/dev/null)"; fi
+    local q h
+    while IFS= read -r q; do [[ -n "$q" ]] && echo "en cola con prioridad: $q"; done < <(prio_en_cola)
+    # dirigidos y ligeros: solo los huecos cogidos de verdad (flock vivo); un .owner suelto de un proceso muerto no cuenta
+    for h in "$DIRDIR"/*.lock; do
+      [[ -f "$h" ]] || continue
+      flock -n "$h" true 2>/dev/null && continue
+      q="$(sed -n 1p "${h%.lock}.owner" 2>/dev/null)"
+      if [[ -n "$q" ]]; then echo "dirigido: $q · bd=$(sed -n 2p "${h%.lock}.owner" 2>/dev/null)"; else echo "dirigido: (arrancando)"; fi
+    done
+    for h in "$REPDIR"/*.lock; do
+      [[ -f "$h" ]] || continue
+      flock -n "$h" true 2>/dev/null && continue
+      q="$(sed -n 1p "${h%.lock}.owner" 2>/dev/null)"
+      h="${h##*/}"; h="${h%.lock}"
+      if [[ -n "$q" ]]; then echo "replay $h: $q · desfase=$(sed -n 3p "$REPDIR/$h.owner" 2>/dev/null) · bd=$(sed -n 2p "$REPDIR/$h.owner" 2>/dev/null)"; else echo "replay $h: (arrancando)"; fi
+    done
+    for h in "$LIGDIR"/*.lock; do
+      [[ -f "$h" ]] || continue
+      flock -n "$h" true 2>/dev/null && continue
+      q="$(cat "${h%.lock}.owner" 2>/dev/null)"
+      echo "ligero: ${q:-(arrancando)}"
+    done
+    return 0
+  fi
+
+  local ETIQ=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --etiqueta) ETIQ="$2"; shift 2 ;;
+      --) shift; break ;;
+      *) break ;;
+    esac
+  done
+  [[ $# -eq 0 ]] && { sed -n '2,/^# - Timeout del comando/p' "$0"; echo "#"; return 2; }
+
+  # Pausa de Dusk (D-2): rechazo con exit 3 antes de coger turno, hueco o lock y de cargar nada pesado.
+  local MOTIVO_DUSK
+  MOTIVO_DUSK="$(dusk_pausado_motivo)"
+  if [[ -n "$MOTIVO_DUSK" ]] && es_dusk "$@"; then
+    echo "⛔ Dusk está en pausa ($MOTIVO_DUSK): factory-test no lo ejecuta. No lo lances por otra vía; sigue con PHPUnit/replay, Pint y PHPStan y anota en el handoff «Dusk no ejecutado: en pausa». No bloquees la tarjeta por esto."
+    exit 3
+  fi
+
+  # Tope de procesos (D-3): se rebajan los argumentos antes de clasificar, para que la clasificación vea
+  # el comando ya rebajado. `estado` ya ha vuelto más arriba: no se ve afectado.
+  local N_PROCS OUT_REBAJA RC_REBAJA
+  N_PROCS="$(max_procesos)"
+  OUT_REBAJA="$(rebajar_args "$N_PROCS" "$@")"; RC_REBAJA=$?
+  if (( RC_REBAJA == 0 )); then
+    local -a ARGS_REBAJA=()
+    mapfile -t ARGS_REBAJA <<< "$OUT_REBAJA"
+    echo "factory-test: tope de $N_PROCS procesos: $* → ${ARGS_REBAJA[*]}"
+    set -- "${ARGS_REBAJA[@]}"
+  fi
+
+  # BD propia del worktree
+  local d="$PWD" ENVF=""
+  while [[ "$d" != "/" ]]; do
+    # shellcheck disable=SC1090  # el env del worktree es dinámico
+    if [[ -f "$d/.factory/env" ]]; then ENVF="$d/.factory/env"; set -a; . "$ENVF"; set +a; break; fi
+    d="$(dirname "$d")"
+  done
+
+  local TOP REPO TS LOG QUIEN CLAVEBD CLAVEF RP=1 PESADO_REPO USA_TOKEN=0
+  TOP="$(git rev-parse --show-toplevel 2>/dev/null || echo "$PWD")"
+  REPO="$(basename "$TOP")"
+  [[ -n "$ENVF" && -n "${FX_REPO:-}" ]] && REPO="$FX_REPO"
+  # BD efectiva: la de .factory/env; sin él (checkout del usuario), el toplevel
+  if [[ -n "$ENVF" && -n "${DB_DATABASE:-}" ]]; then CLAVEBD="${DB_HOST:-}:${DB_PORT:-}/$DB_DATABASE"; else CLAVEBD="$TOP"; fi
+  CLAVEF="$(clave_fichero "$CLAVEBD")"
+
+  local LIMITE="${FX_TEST_WAIT:-7200}" PAUSA="${FX_TEST_PAUSA:-2}"
+  local FIN=$((SECONDS + LIMITE)) esperando=0 cedido=0 resto cola
+  sin_turno() { echo "✗ sin turno tras ${LIMITE}s"; exit 75; }
+
+  # clase: solo se mira la config del repo si hace falta (ni FX_TEST_PESADO ni ligero)
+  if [[ "${FX_TEST_PESADO:-}" != 1 ]] && ! es_ligero "$@"; then repo_es_pesado "$REPO" && RP=1 || RP=0; fi
+  clase_de "$RP" "$@"
+  if [[ $CLASE == replay ]]; then
+    if replay_degradado "$@"; then CLASE=pesado
+    # hueco de replay (D-2): paralelo (ya rebajado), con BD de .factory/env y de un repo de la lista
+    elif es_paralelo "$@" && [[ -n "$ENVF" && -n "${DB_DATABASE:-}" ]] && repo_replay_simultaneo "$REPO"; then MOTIVO="phpunit-replay paralelo en hueco de replay"
+    else CLASE=dirigido; MOTIVO="phpunit-replay normal"; fi
+  fi
+  # token de ParallelTesting: solo un dirigido no paralelo, con BD de .factory/env, y si quien llama no trae TEST_TOKEN
+  if [[ $CLASE == dirigido && -n "$ENVF" && -n "${DB_DATABASE:-}" && -z "${TEST_TOKEN+x}" ]] && ! es_paralelo "$@" && repo_usa_token "$REPO"; then USA_TOKEN=1; fi
+  TS="$(date +%Y%m%d-%H%M%S)"; LOG="$LOGDIR/$TS-$REPO-$CLASE-$$.log"
+  QUIEN="${HERMES_PROFILE:-${USER}} pid=$$ repo=$REPO [$CLASE] ${ETIQ:+[$ETIQ] }cmd=$* desde=$(date +%H:%M:%S)"
+  [[ $RP == 1 ]] && PESADO_REPO="pesado" || PESADO_REPO="no pesado"
+  echo "▶ $CLASE ($MOTIVO) · repo $REPO ($PESADO_REPO)$([[ $CLASE != ligero && $USA_TOKEN == 0 ]] && echo " · bd $CLAVEBD")"
+  trap limpiar_salida EXIT
+
+  case "$CLASE" in
+    ligero)
+      # Ligero: hueco contado en ligeros.d/<n>.lock (n = 1..FX_TEST_LIGEROS). No toca nada del turno pesado
+      # (ni factory-test.lock/.owner ni prio.d) ni la BD: la prioridad solo ordena la cola pesada.
+      local MAXL="${FX_TEST_LIGEROS:-3}"
+      [[ "$MAXL" =~ ^[0-9]+$ ]] && (( MAXL > 0 )) || MAXL=3
+      coger_hueco "$LIGDIR" "$MAXL" ligero
+      echo "$QUIEN" > "$LIGDIR/$HUECO.owner"
+      echo "⚡ ligero (sin turno de suites)"
+      ;;
+    dirigido)
+      # Dirigido: hueco contado en dirigidos.d/ (env > tests.dirigidos de la config > 4), luego lock de la BD.
+      local MAXD="${FX_TEST_DIRIGIDOS-}"
+      [[ -z "${FX_TEST_DIRIGIDOS+x}" ]] && MAXD="$(config_get tests.dirigidos)"
+      [[ "$MAXD" =~ ^[0-9]+$ ]] && (( 10#$MAXD > 0 )) && MAXD=$((10#$MAXD)) || MAXD=4
+      coger_hueco "$DIRDIR" "$MAXD" dirigido
+      if [[ $USA_TOKEN == 1 ]]; then   # BD propia <base>_test_<100+hueco>: Laravel la crea y la migra sola
+        CLAVEBD="${CLAVEBD}_test_$((100 + HUECO))"; CLAVEF="$(clave_fichero "$CLAVEBD")"
+        export LARAVEL_PARALLEL_TESTING=1 TEST_TOKEN=$((100 + HUECO))
+        echo "🔑 ParallelTesting token=$TEST_TOKEN · bd $CLAVEBD"
+      fi
+      printf '%s\n%s\n' "$QUIEN" "$CLAVEBD" > "$DIRDIR/$HUECO.owner"
+      coger_bd "$CLAVEBD" "$BDDIR/$CLAVEF" "$QUIEN"
+      ;;
+    replay)
+      # Replay a la vez: hueco en replay.d/ + lock de su BD por rango, sin hueco de dirigidos ni turno pesado.
+      coger_replay "$(replay_huecos)" "$N_PROCS" "$CLAVEBD" "$QUIEN"
+      CLAVEBD="$REPLAY_CLAVE"
+      if [[ -n "${FX_TOKEN_OFFSET+x}" && "$FX_TOKEN_OFFSET" != "$REPLAY_OFFSET" ]]; then
+        echo "⚠ FX_TOKEN_OFFSET=$FX_TOKEN_OFFSET del entorno se sobreescribe con $REPLAY_OFFSET (hueco de replay $HUECO)"
+      fi
+      export FX_TOKEN_OFFSET="$REPLAY_OFFSET"
+      echo "🔁 hueco de replay $HUECO · FX_TOKEN_OFFSET=$FX_TOKEN_OFFSET · bd $CLAVEBD"
+      ;;
+    *)
+      tiene_prio "$TOP" && PRIO=1
+      if [[ $PRIO == 1 ]]; then
+        # se escribe aparte y se mueve: quien lea prio.d nunca ve una entrada a medias
+        mkdir -p "$PRIODIR"
+        printf 'inicio=%s\n%s\n' "$(inicio_pid $$)" "$QUIEN" > "$PRIODIR/.$$.tmp" && mv -f "$PRIODIR/.$$.tmp" "$PRIODIR/$$"
+      fi
+
+      exec 9>"$LOCK"
+      while :; do
+        if ! flock -n 9; then
+          if [[ $esperando == 0 ]]; then
+            echo "⏳ esperando turno de tests$([[ $PRIO == 1 ]] && echo " (con prioridad)") — lo tiene: $(cat "$OWNER" 2>/dev/null)"
+            esperando=1
+          fi
+          resto=$((FIN - SECONDS))
+          (( resto > 0 )) || sin_turno
+          flock -w "$resto" 9 || sin_turno
+        fi
+        [[ $PRIO == 1 ]] && break
+        cola="$(prio_en_cola)"
+        [[ -z "$cola" ]] && break
+        # sin prioridad y con alguien con prioridad esperando: se le cede el turno
+        flock -u 9
+        if [[ $cedido == 0 ]]; then echo "↪ cedo el turno a quien tiene prioridad: ${cola%%$'\n'*}"; cedido=1; fi
+        (( SECONDS < FIN )) || sin_turno
+        sleep "$PAUSA"
+      done
+      if [[ $PRIO == 1 ]]; then rm -f "$PRIODIR/$$"; fi
+      echo "$QUIEN" > "$OWNER"; TENGO=1
+      coger_bd "$CLAVEBD" "$BDDIR/$CLAVEF" "$QUIEN"
+      ;;
+  esac
+
+  local INI RC DUR
+  INI=$(date +%s)
+  timeout --kill-after=30 "${FX_TEST_TIMEOUT:-2700}" "$@" >"$LOG" 2>&1
+  RC=$?
+  DUR=$(( $(date +%s) - INI ))
+
+  echo "── factory-test: rc=$RC en ${DUR}s · log: $LOG"
+  [[ $RC -eq 124 ]] && echo "✗ TIMEOUT (${FX_TEST_TIMEOUT:-2700}s)"
+  # Fallos (máx. 40 líneas) + final del log (25 líneas)
+  grep -n -E "^(FAIL|ERROR|✘|  ✘)|^[0-9]+\) |There (was|were) [0-9]+ (failure|error)|Failed asserting|Exception:|FAILURES!|ERRORS!" "$LOG" | head -40
+  echo "── final:"; tail -25 "$LOG"
+  return $RC
+}
+
+main "$@"; exit $?

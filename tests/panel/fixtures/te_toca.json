@@ -1,0 +1,6 @@
+{
+  "items": [
+    {"tipo": "plan", "board": "ejemplo", "task_id": "t_0000aaaa", "titulo": "Aprobar plan", "detalle": "5 tarjetas", "pregunta": "¿Apruebas el plan?"},
+    {"tipo": "merge", "board": "ejemplo", "task_id": "t_0000bbbb", "titulo": "Merge", "detalle": "1 PR listo", "pr_url": "https://example.test/pr/1"}
+  ]
+}

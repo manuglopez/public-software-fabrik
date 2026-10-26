@@ -7,3 +7,9 @@ LICENSE|manuglopez  # titular del copyright (MIT): el nombre del autor debe figu
 .gitignore|maquina.local.yaml  # nombre de fichero de configuración local ignorado por git, no un host
 bin/fabrik-cupos|api.kimi.com  # host público de la API de uso (cupos) de Kimi
 *|hermes-agent.nousresearch.com  # documentación pública de Hermes Agent (enlace del README): no es un host privado
+plugin/fabrica/desktop/package-lock.json|registry.npmjs.org  # registro público de npm: URLs de descarga del lock de esbuild, no un host privado
+plugin/fabrica/dashboard/fx_consola.py|tools.environments.local  # módulo Python de Hermes (saneador del entorno), no un host: el sufijo «.local» lo confunde con un TLD
+tests/panel/test_consola.py|tools.environments.local  # ídem: nombre del módulo de Hermes que los tests simulan o ocultan
+plugin/fabrica/plugin.yaml|manuglopez  # autor del plugin: el catálogo de plugins de Hermes lo muestra como mantenedor (como LICENSE)
+plugin/fabrica/README.md|github.com/manuglopez/public-software-fabrik  # URL del repo público del motor: el README del catálogo indica de dónde instalarlo
+plugin/fabrica/desktop/plugin.js|bellard.org  # comentario de xterm.js dentro del bundle publicado (enlace público a JSLinux), no un host privado

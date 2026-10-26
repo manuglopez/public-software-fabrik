@@ -1,0 +1,21 @@
+{
+  "name": "fabrica-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Mitad de escritorio de The Factory: fuentes en src/, bundle generado en plugin.js (no versionado).",
+  "scripts": {
+    "build": "node build.mjs",
+    "watch": "node build.mjs --watch"
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.27.2",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "react-test-renderer": "^19.3.1"
+  }
+}

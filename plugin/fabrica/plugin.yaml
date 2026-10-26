@@ -1,0 +1,7 @@
+name: fabrica
+version: "0.1.0"
+description: "The Factory — control panel for the software-fabrik multi-agent factory in Hermes Desktop (/the-factory page, status chip and data backend), plus the /fabrica skill."
+author: manuglopez
+kind: standalone
+platforms: []
+requires_hermes: ">=0.22.5"

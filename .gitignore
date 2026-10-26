@@ -17,3 +17,8 @@ packs/*
 
 # lecciones compartidas: viven en el repo del pack o en $FABRIK_DATA, nunca en el motor
 /conocimiento/
+
+# The Factory (panel): el bundle del escritorio se genera con scripts/plugin-desktop.sh y las dependencias con npm ci
+plugin/fabrica/desktop/plugin.js
+plugin/fabrica/desktop/node_modules/
+plugin/fabrica/desktop/.prueba/

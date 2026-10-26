@@ -1,0 +1,17 @@
+-p programador config set fallback_providers [{"provider": "kimi-coding", "model": "kimi-for-coding"}, {"provider": "claude-subscription-directsdk-experimental", "model": "claude-sonnet-5-5"}]
+-p programador config set plugins.entries.claude-subscription-directsdk-experimental.settings.claude_config_dir ~/.config/fabrica/claude-b
+-p tester config set model.provider claude-subscription-directsdk-experimental
+-p tester config set model.default claude-opus-5-5
+-p tester config set fallback_providers [{"provider": "kimi-coding", "model": "kimi-for-coding"}, {"provider": "claude-subscription-directsdk-experimental", "model": "claude-sonnet-5-5"}]
+-p tester config set plugins.entries.claude-subscription-directsdk-experimental.settings.claude_config_dir ~/.config/fabrica/claude-b
+-p revisor config set fallback_providers [{"provider": "claude-subscription-directsdk-experimental", "model": "claude-sonnet-5-5"}, {"provider": "antigravity-oauth", "model": "gemini-3.8-flash-high"}]
+-p seguridad config set model.provider claude-subscription-directsdk-experimental
+-p seguridad config set model.default claude-opus-5-5
+-p seguridad config set fallback_providers [{"provider": "claude-subscription-directsdk-experimental", "model": "claude-sonnet-5-5"}, {"provider": "antigravity-oauth", "model": "gemini-3.8-flash-high"}]
+-p seguridad config set plugins.entries.claude-subscription-directsdk-experimental.settings.claude_config_dir ~/.config/fabrica/claude-b
+-p orquestador config set fallback_providers [{"provider": "claude-subscription-directsdk-experimental", "model": "claude-sonnet-5-5"}, {"provider": "antigravity-oauth", "model": "gemini-3.8-flash-high"}]
+-p orquestador config set plugins.entries.claude-subscription-directsdk-experimental.settings.claude_config_dir ~/.config/fabrica/claude-b
+-p explorador config set model.provider antigravity-oauth
+-p explorador config set model.default gemini-3.8-flash-high
+-p explorador config set fallback_providers []
+-p docs config set fallback_providers []

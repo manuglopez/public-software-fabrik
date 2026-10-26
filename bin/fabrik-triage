@@ -12,6 +12,9 @@
 #   fabrik-triage              vigila (bucle)
 #   fabrik-triage --una-vez    una pasada        fabrik-triage --seco   lista lo que haría (sin conserje)
 # Tarjetas con «[manual]» en el título no se tocan.
+# Tableros aislados (un slug por línea en ~/.hermes/factory/tableros-aislados, o FABRIK_TABLEROS_AISLADOS):
+# experimentos con sus propios perfiles/modelos. Ni enrutador, ni conserje, ni reparto de modelos ni aparcado
+# por cupo; solo el título de dependencias y el despacho.
 set -uo pipefail
 HA="${HERMES_AGENT_SRC:-$HOME/.hermes/hermes-agent}"
 PY=""
@@ -19,7 +22,7 @@ for c in "$HOME"/.hermes/installs/*/environments/*/venv/bin/python; do
   if env -u VIRTUAL_ENV PYTHONPATH="$HA" "$c" -c "import hermes_cli.kanban_db, hermes_cli.kanban_db_connect" 2>/dev/null; then PY="$c"; break; fi
 done
 [[ -n "$PY" ]] || { echo "✗ no encuentro el Python de Hermes"; exit 1; }
-FABRIK_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+FABRIK_SRC="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"  # ruta real: se llama por enlace
 export FABRIK_SRC
 exec env -u VIRTUAL_ENV PYTHONPATH="$HA" "$PY" - "$@" <<'PYEOF'
 import json, os, re, subprocess, sys, time, datetime
@@ -183,6 +186,24 @@ def comentarios(board, c, estado):
     return True
 
 
+ROLES_MODELO = ("programador", "tester", "revisor", "seguridad", "orquestador", "explorador", "docs")
+
+
+def asignar_modelos(board, c):
+    """Tarjetas listas sin modelo → fabrik-modelos elige modelo y cuenta por cupo/calidad (antes de despachar)."""
+    q = ("SELECT 1 FROM tasks WHERE status='ready' AND coalesce(model_override,'')='' AND title NOT LIKE '%[manual]%'"
+         f" AND assignee IN ({','.join('?' * len(ROLES_MODELO))}) LIMIT 1")
+    if os.environ.get("FABRIK_MODELOS", "on") == "off":   # tests del aparcado por cupo lo aíslan
+        return
+    if c.execute(q, ROLES_MODELO).fetchone():
+        r = subprocess.run([str(Path(os.environ["FABRIK_SRC"]) / "bin/fabrik-modelos"), "asignar", board],
+                           capture_output=True, text=True, timeout=180)
+        for l in r.stdout.splitlines():
+            log(f"modelo: {l}")
+        if r.returncode:
+            log(f"{board}: fabrik-modelos falló: {r.stderr.strip()[-200:]}")
+
+
 def despachar_listas(board, c):
     """El despachador del gateway lee kanban.max_in_progress* solo al arrancar; `hermes kanban dispatch`
     relee config.yaml en cada llamada. Despachando aquí cada minuto, los límites nuevos valen sin reiniciar
@@ -194,18 +215,37 @@ def despachar_listas(board, c):
             log(f"{board}: despachadas {len(n)}: " + "; ".join(l.strip()[:60] for l in n))
 
 
+def tableros_aislados():
+    p = Path(os.environ.get("FABRIK_TABLEROS_AISLADOS", str(Path.home() / ".hermes/factory/tableros-aislados")))
+    try:
+        return {l.strip() for l in p.read_text().splitlines() if l.strip() and not l.lstrip().startswith("#")}
+    except OSError:
+        return set()
+
+
 estado = cargar_estado()
 ultimo_despacho = 0.0
 while True:
     cambio = False
     toca_despachar = time.time() - ultimo_despacho >= 60
+    aislados = tableros_aislados()
     for db in sorted(BOARDS.glob("*/kanban.db")):
         board = db.parent.name
         try:
             c = connect(board=board)
+            if board in aislados:          # experimento con perfiles propios: no se reasigna ni se comenta
+                dependencias(board, c)
+                if toca_despachar and not SECO:
+                    despachar_listas(board, c)
+                continue
             enrutar(board, c)
             dependencias(board, c)
             cambio |= comentarios(board, c, estado)
+            if not SECO:
+                try:
+                    asignar_modelos(board, c)   # antes de aparcar/despachar: modelo y cuenta con cupo
+                except Exception as e:          # nunca debe impedir aparcar ni despachar
+                    log(f"{board}: asignar modelos: {e}")
             triage_cupos.esperar_cupo(board, c, hk=hk, seco=SECO, log=log)
             if toca_despachar and not SECO:
                 despachar_listas(board, c)

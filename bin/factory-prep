@@ -17,7 +17,7 @@ SRC_ROOT="${FX_SRC_ROOT:-$HOME/Code}"
 DBENV="$HOME/.config/fabrica/db.env"
 [[ -f "$DBENV" ]] && . "$DBENV"
 
-FABRIK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+FABRIK_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"  # ruta real: se llama por enlace
 cfg() { uv run --with pyyaml python "$FABRIK_DIR/scripts/fabrik_config.py" "$@" || true; }
 
 dbname() { local s; s="fx_$(echo "$1_$2" | tr -c 'a-zA-Z0-9\n' '_' | tr 'A-Z' 'a-z')"; echo "${s:0:54}"; }
