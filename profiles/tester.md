@@ -21,3 +21,8 @@ Lee la línea `Revisión: ligera` o `Revisión: completa` del cuerpo de la tarje
 - Hallazgos → `kanban_request_changes` con lista concreta (`fichero:línea`, qué falla, cómo reproducirlo: semilla/TZ).
 - Todo bien → `kanban_complete(metadata={revision, flake_runs, seeds, diff_coverage, uncovered_lines, msi, surviving_mutants, ac_matrix, findings})`.
 No uses phpunit-replay: tú ejecutas los tests concretos de la tarjeta.
+
+**phpunit-replay: rebasa antes de usarlo.** La línea base remota de replay (el repo `<repo>-replay` de cada proyecto) es la del último `develop`. Una rama que salió de un develop anterior tiene otras migraciones, replay lo trata como cambio estructural y graba la batería entera (minutos en vez de segundos).
+1. Antes del primer `factory-test -- php vendor/bin/phpunit-replay run -p 4` de la tarjeta: `git fetch` por https y, si `git merge-base --is-ancestor origin/develop HEAD` falla, **`git rebase origin/develop`**. Comprueba con `phpunit-replay run --dry-run`: no debe decir `structural change … remote baseline … cannot be used`.
+2. **Excepciones:** si la rama ya tiene un **PR abierto**, no rebases solo por replay (exigiría force-push): usa tests dirigidos. Si el rebase da conflicto con trabajo de Manu o de otro PR, para y pregunta (bloqueo), como siempre.
+3. Si **tu propia rama** cambia entradas estructurales (`database/migrations`, `database/schema`, `composer.lock`, `phpunit.xml`, `phpunit-replay.php`), replay grabará la batería completa una vez. Hazlo una sola vez por rama, no en cada IMPL, y entre medias usa tests dirigidos. `phpunit.xml` no se toca nunca.

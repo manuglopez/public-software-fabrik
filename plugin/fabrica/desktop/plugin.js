@@ -7,9 +7,9 @@ var __commonJS = (cb, mod) => function __require() {
   return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
 };
 
-// ../../../../../../software-fabrik/plugin/fabrica/desktop/node_modules/@xterm/xterm/lib/xterm.js
+// node_modules/@xterm/xterm/lib/xterm.js
 var require_xterm = __commonJS({
-  "../../../../../../software-fabrik/plugin/fabrica/desktop/node_modules/@xterm/xterm/lib/xterm.js"(exports, module) {
+  "node_modules/@xterm/xterm/lib/xterm.js"(exports, module) {
     !(function(e, t) {
       if ("object" == typeof exports && "object" == typeof module) module.exports = t();
       else if ("function" == typeof define && define.amd) define([], t);
@@ -6066,9 +6066,9 @@ WARNING: This link could potentially be dangerous`)) {
   }
 });
 
-// ../../../../../../software-fabrik/plugin/fabrica/desktop/node_modules/@xterm/addon-fit/lib/addon-fit.js
+// node_modules/@xterm/addon-fit/lib/addon-fit.js
 var require_addon_fit = __commonJS({
-  "../../../../../../software-fabrik/plugin/fabrica/desktop/node_modules/@xterm/addon-fit/lib/addon-fit.js"(exports, module) {
+  "node_modules/@xterm/addon-fit/lib/addon-fit.js"(exports, module) {
     !(function(e, t) {
       "object" == typeof exports && "object" == typeof module ? module.exports = t() : "function" == typeof define && define.amd ? define([], t) : "object" == typeof exports ? exports.FitAddon = t() : e.FitAddon = t();
     })(self, (() => (() => {
@@ -6188,7 +6188,7 @@ function Chip({ abrir }) {
 import { useState as useState8 } from "react";
 import { jsx as jsx17, jsxs as jsxs17 } from "react/jsx-runtime";
 
-// ../../../../../../software-fabrik/plugin/fabrica/desktop/node_modules/@xterm/xterm/css/xterm.css
+// node_modules/@xterm/xterm/css/xterm.css
 var xterm_default = `/**
  * Copyright (c) 2014 The xterm.js authors. All rights reserved.
  * Copyright (c) 2012-2013, Christopher Jeffrey (MIT License)
